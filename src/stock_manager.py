@@ -16,7 +16,10 @@ from typing import Optional
 
 import pandas as pd
 
-from config import NIFTY50_STOCKS, DHAN_INSTRUMENTS_CSV_URL, INSTRUMENTS_CACHE_FILE
+from config import (
+    NIFTY50_STOCKS, DHAN_INSTRUMENTS_CSV_URL, INSTRUMENTS_CACHE_FILE,
+    DHAN_CLIENT_ID, DHAN_ACCESS_TOKEN,
+)
 from src.models import OptionInfo
 from src.options_manager import InstrumentsMaster   # reuse existing master loader
 
@@ -342,12 +345,32 @@ class StockOptionsManager:
         import requests as req
 
         spot_prices: dict[str, float] = {}
-        access_token = str(getattr(dhan_client, "access_token", "") or "")
-        client_id    = str(getattr(dhan_client, "client_id",    "") or "")
 
-        if not access_token or not client_id:
-            logger.warning("Missing Dhan credentials for HTTP LTP call")
-            return spot_prices
+        # Prefer the client's own header dict (dhanhq v2 exposes this); fall back
+        # to individual attributes and finally to the config env-var values.
+        built_in_headers = getattr(dhan_client, "header", None)
+        if built_in_headers and built_in_headers.get("access-token"):
+            headers = dict(built_in_headers)
+            headers["Content-Type"] = "application/json"
+        else:
+            access_token = (
+                str(getattr(dhan_client, "access_token", "") or "")
+                or str(getattr(dhan_client, "token", "") or "")
+                or DHAN_ACCESS_TOKEN
+            )
+            client_id = (
+                str(getattr(dhan_client, "client_id", "") or "")
+                or str(getattr(dhan_client, "clientId", "") or "")
+                or DHAN_CLIENT_ID
+            )
+            if not access_token or not client_id:
+                logger.warning("Missing Dhan credentials for HTTP LTP call")
+                return spot_prices
+            headers = {
+                "Content-Type": "application/json",
+                "access-token": access_token,
+                "client-id":    client_id,
+            }
 
         rev     = {sid: sym for sym, sid in eq_ids.items()}
         sec_ids = [int(sid) for sid in eq_ids.values() if sid.isdigit()]
@@ -356,11 +379,7 @@ class StockOptionsManager:
             resp = req.post(
                 "https://api.dhan.co/v2/marketfeed/ltp",
                 json={"NSE_EQ": sec_ids},
-                headers={
-                    "Content-Type": "application/json",
-                    "access-token": access_token,
-                    "client-id":    client_id,
-                },
+                headers=headers,
                 timeout=15,
             )
             resp.raise_for_status()
@@ -411,18 +430,29 @@ def fetch_nifty_spot(dhan_client) -> float:
     """
     import requests as req
 
-    access_token = str(getattr(dhan_client, "access_token", "") or "")
-    client_id    = str(getattr(dhan_client, "client_id",    "") or "")
-
-    if not access_token or not client_id:
-        logger.warning("Cannot fetch Nifty spot: missing credentials")
-        return 0.0
-
-    headers = {
-        "Content-Type": "application/json",
-        "access-token": access_token,
-        "client-id":    client_id,
-    }
+    built_in_headers = getattr(dhan_client, "header", None)
+    if built_in_headers and built_in_headers.get("access-token"):
+        headers = dict(built_in_headers)
+        headers["Content-Type"] = "application/json"
+    else:
+        access_token = (
+            str(getattr(dhan_client, "access_token", "") or "")
+            or str(getattr(dhan_client, "token", "") or "")
+            or DHAN_ACCESS_TOKEN
+        )
+        client_id = (
+            str(getattr(dhan_client, "client_id", "") or "")
+            or str(getattr(dhan_client, "clientId", "") or "")
+            or DHAN_CLIENT_ID
+        )
+        if not access_token or not client_id:
+            logger.warning("Cannot fetch Nifty spot: missing credentials")
+            return 0.0
+        headers = {
+            "Content-Type": "application/json",
+            "access-token": access_token,
+            "client-id":    client_id,
+        }
 
     # Try different segment key names used by different Dhan API versions
     for seg_key in ("IDX_I", "NSE_IDX", "NSE_INDEX"):

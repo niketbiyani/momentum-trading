@@ -77,6 +77,43 @@
     </table>
   </div>
 
+  <!-- Lookback delta heatmap -->
+  <div id="lookback-section">
+    <div class="section-hdr">
+      Lookback Δ% per 10-bar window
+      <span class="lb-tf-group">
+        <button class="lb-tf-btn active" data-lbtf="5s">5s</button>
+        <button class="lb-tf-btn" data-lbtf="15s">15s</button>
+        <button class="lb-tf-btn" data-lbtf="1m">1m</button>
+      </span>
+      <span class="lb-legend">
+        <span class="legend-ce">■ CE</span>
+        <span class="legend-pe">■ PE</span>
+        &nbsp; large cell = spike in that window
+      </span>
+    </div>
+    <table id="lookback-table">
+      <thead>
+        <tr>
+          <th class="th-left">Option</th>
+          <th title="Δ in last 10 bars">10b</th>
+          <th title="Δ in bars 11–20">20b</th>
+          <th title="Δ in bars 21–30">30b</th>
+          <th title="Δ in bars 31–40">40b</th>
+          <th title="Δ in bars 41–50">50b</th>
+          <th title="Δ in bars 51–60">60b</th>
+          <th title="Δ in bars 61–70">70b</th>
+          <th title="Δ in bars 71–80">80b</th>
+          <th title="Δ in bars 81–90">90b</th>
+          <th title="Δ in bars 91–100">100b</th>
+        </tr>
+      </thead>
+      <tbody id="lookback-body">
+        <tr><td colspan="11" class="empty-msg">Waiting for data…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
   <!-- Nifty signals panel -->
   <div id="nifty-signals-wrap">
     <div class="signals-header">Signals ▲▼</div>
@@ -102,6 +139,7 @@
           <th>CE Δ%</th>
           <th>CE RSI</th>
           <th>CE MACD-H</th>
+          <th title="10-bar % change">CE Spk%</th>
           <th>CE Signal</th>
           <th class="col-sep"></th>
           <!-- ATM PE -->
@@ -109,6 +147,7 @@
           <th>PE Δ%</th>
           <th>PE RSI</th>
           <th>PE MACD-H</th>
+          <th title="10-bar % change">PE Spk%</th>
           <th>PE Signal</th>
         </tr>
       </thead>

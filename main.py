@@ -428,12 +428,18 @@ class SpikeDetectorApp:
         for sid, state in self._instrument_states.items():
             underlying = state.info.underlying or state.info.symbol
 
-            # Per-timeframe indicators + per-TF signal status
+            # Per-timeframe indicators + per-TF signal status + lookback deltas
             indicators_by_tf: dict[str, dict] = {}
             for tf in TIMEFRAMES:
                 ind = state.indicators.get(tf)
                 if ind:
                     sig = self._tf_signals.get((sid, tf))
+                    # Lookback delta for 10-100 bars (shows WHEN each spike occurred)
+                    lb_delta = {
+                        str(k): round(v, 2) if v is not None else None
+                        for k, v in ind.lookback_delta.items()
+                        if k <= 100
+                    }
                     indicators_by_tf[tf] = {
                         "rsi":             round(ind.rsi, 1),
                         "rsi_ema":         round(ind.rsi_ema, 1),
@@ -441,6 +447,10 @@ class SpikeDetectorApp:
                         "bars":            len(state.bars.get(tf, [])),
                         "signal_status":   sig.status    if sig else None,
                         "signal_direction":sig.direction if sig else None,
+                        # 10-bar lookback % — quick single-number spike indicator
+                        "spk10":           round(ind.lookback_pct.get(10) or 0, 2),
+                        # Full lookback delta table (10,20,...,100 bars)
+                        "lb_delta":        lb_delta,
                     }
 
             active_sig = state.active_signals[-1] if state.active_signals else None

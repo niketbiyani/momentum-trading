@@ -8,6 +8,7 @@ let state = {
 };
 let activeTf  = '1m';
 let activeTab = 'nifty';   // 'nifty' | 'stocks'
+let lbTf      = '5s';      // timeframe used for lookback heatmap
 let searchQuery = '';
 let reconnectDelay = 1000;
 
@@ -138,17 +139,22 @@ function optRowClass(ceOpt, peOpt) {
 }
 
 function optCell(opt, tf) {
-  if (!opt) return '<td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>';
+  if (!opt) return '<td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>';
   const ind  = (opt.indicators || {})[tf] || {};
   const ltp  = opt.ltp > 0 ? fmt(opt.ltp) : '—';
   const dPct = opt.ltp_change_pct;
   const rsi  = ind.rsi  != null ? ind.rsi  : opt.rsi;
   const mh   = ind.macd_hist != null ? ind.macd_hist : opt.macd_hist;
+  const spk  = ind.spk10 != null ? ind.spk10 : null;
+  const spkStr = spk != null
+    ? (spk >= 0 ? '+' : '') + spk.toFixed(1) + '%'
+    : '—';
   return `
     <td>${ltp}</td>
     <td class="${deltaClass(dPct)}">${fmtPct(dPct)}</td>
     <td class="${rsiClass(rsi)}">${fmtRsi(rsi)}</td>
     <td class="${deltaClass(mh)}">${mh != null ? (mh >= 0 ? '+' : '') + fmt(mh, 3) : '—'}</td>
+    <td class="${spkClass(spk)}" style="${spk != null ? heatBg(spk) ? 'background:' + heatBg(spk) + ';' : '' : ''}">${spkStr}</td>
     <td>${sigBadge(opt)}</td>`;
 }
 
@@ -176,6 +182,7 @@ function render() {
   renderStatus();
   if (activeTab === 'nifty') {
     renderNiftyTab();
+    renderLookbackHeatmap();
   } else {
     renderTable();
     renderSignals();
@@ -325,6 +332,75 @@ function renderSignals() {
     </div>`;
   }).join('');
 }
+
+// ── Lookback heatmap ──────────────────────────────────────────────────────────
+const LB_PERIODS = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
+// Compute background color for a delta % value
+// Large positive = bright green; large negative = bright red; near 0 = transparent
+function heatBg(v) {
+  if (v == null || Math.abs(v) < 0.3) return '';
+  const intensity = Math.min(Math.abs(v) / 6, 1);   // saturates at ±6%
+  const alpha = 0.15 + intensity * 0.70;
+  return v > 0
+    ? `rgba(63,185,80,${alpha.toFixed(2)})`
+    : `rgba(248,81,73,${alpha.toFixed(2)})`;
+}
+
+function spkClass(v) {
+  if (v == null || Math.abs(v) < 0.5) return 'spk-muted';
+  return v > 0 ? 'spk-pos' : 'spk-neg';
+}
+
+function renderLookbackHeatmap() {
+  const tbody = document.getElementById('lookback-body');
+  const nifty = state.nifty || {};
+  const opts  = nifty.options || {};
+
+  const ORDER = [
+    { key: 'ATM_CE', label: 'ATM CE', cls: 'opt-ce' },
+    { key: 'ITM_CE', label: 'ITM CE', cls: 'opt-ce' },
+    { key: 'ATM_PE', label: 'ATM PE', cls: 'opt-pe' },
+    { key: 'ITM_PE', label: 'ITM PE', cls: 'opt-pe' },
+  ];
+
+  const rows = ORDER.map(({ key, label, cls }) => {
+    const opt = opts[key];
+    const ind = (opt && opt.indicators && opt.indicators[lbTf]) || {};
+    const ld  = ind.lb_delta || {};
+
+    const cells = LB_PERIODS.map(p => {
+      const v = ld[String(p)];
+      if (v == null) return `<td class="hc-empty">—</td>`;
+      const bg      = heatBg(v);
+      const valCls  = v > 0 ? 'hc-pos' : v < 0 ? 'hc-neg' : 'hc-neu';
+      const bgStyle = bg ? `background:${bg};` : '';
+      const sign    = v > 0 ? '+' : '';
+      const tip     = `${p}b delta: ${sign}${v.toFixed(2)}%`;
+      return `<td class="${valCls}" style="${bgStyle}" title="${tip}">${sign}${v.toFixed(1)}%</td>`;
+    }).join('');
+
+    return `<tr><td class="${cls}">${label}</td>${cells}</tr>`;
+  });
+
+  tbody.innerHTML = rows.length ? rows.join('') :
+    `<tr><td colspan="11" class="empty-msg">Waiting for Nifty data…</td></tr>`;
+}
+
+// ── Lookback TF buttons ───────────────────────────────────────────────────────
+function updateLbTfButtons() {
+  document.querySelectorAll('.lb-tf-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.lbtf === lbTf);
+  });
+}
+
+document.querySelectorAll('.lb-tf-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    lbTf = btn.dataset.lbtf;
+    updateLbTfButtons();
+    renderLookbackHeatmap();
+  });
+});
 
 // ── TF button wiring ──────────────────────────────────────────────────────────
 document.querySelectorAll('.tf-btn').forEach(btn => {

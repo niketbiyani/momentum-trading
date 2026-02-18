@@ -243,6 +243,94 @@ body {
 .row-atm td:first-child { font-weight: 700; }
 .row-itm td:first-child { color: var(--muted); }
 
+/* ── Lookback heatmap section ────────────────────────────────────────────── */
+#lookback-section {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  max-height: 180px;
+  overflow: auto;
+}
+
+.section-hdr {
+  padding: 6px 16px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.lb-tf-group { display: flex; gap: 3px; }
+
+.lb-tf-btn {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  transition: all 0.15s;
+}
+.lb-tf-btn:hover  { border-color: var(--accent); color: var(--accent); }
+.lb-tf-btn.active { background: var(--accent); border-color: var(--accent); color: #0d1117; font-weight: 700; }
+
+.lb-legend { color: var(--muted); font-size: 10px; font-weight: 400; text-transform: none; margin-left: auto; }
+.legend-ce { color: var(--accent); }
+.legend-pe { color: var(--orange); }
+
+#lookback-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+#lookback-table th {
+  padding: 4px 6px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  background: var(--bg);
+}
+#lookback-table th.th-left { text-align: left; width: 68px; }
+
+#lookback-table td {
+  padding: 4px 6px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  white-space: nowrap;
+  transition: background 0.2s;
+}
+#lookback-table td:first-child { text-align: left; font-weight: 700; }
+
+/* Heat cells — background set inline via JS based on magnitude */
+.hc-pos { color: var(--green); }
+.hc-neg { color: var(--red);   }
+.hc-neu { color: var(--muted); }
+.hc-empty { color: var(--muted); font-size: 10px; }
+
+/* Spike% column in stocks table */
+.spk-pos  { color: var(--green); font-weight: 700; }
+.spk-neg  { color: var(--red);   font-weight: 700; }
+.spk-muted{ color: var(--muted); }
+
 /* ── Nifty signals panel ─────────────────────────────────────────────────── */
 #nifty-signals-wrap {
   height: 200px;
