@@ -43,7 +43,10 @@ from typing import Optional
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.FileHandler("spike_detector.log")],
+    handlers=[
+        logging.FileHandler("spike_detector.log"),
+        logging.StreamHandler(),   # also print to terminal so errors are visible
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -221,24 +224,31 @@ class SpikeDetectorApp:
         time.sleep(0.5)
         print(f"  Dashboard: http://localhost:{WEB_PORT}")
 
-        # 2. Load instruments master (shared by both managers via disk cache)
-        self._set_status("Loading instruments master…")
-        if not self._stock_manager.initialise():
-            logger.warning("Instruments master (stock) load failed — using placeholders")
-        if not self._nifty_manager.initialise():
-            logger.warning("Instruments master (nifty) load failed — using placeholders")
-
-        # 3. Init Dhan REST client
+        # 2. Init Dhan REST client first (needed for fetch_security_list fallback)
         self._set_status("Connecting to Dhan API…")
         try:
             from dhanhq import dhanhq
             self._dhan = dhanhq(DHAN_CLIENT_ID, DHAN_ACCESS_TOKEN)
+            logger.info(
+                f"Dhan client ready — client_id={DHAN_CLIENT_ID[:4]}… "
+                f"token={DHAN_ACCESS_TOKEN[:8]}…"
+            )
         except ImportError:
             print("[ERROR] dhanhq not installed. Run: pip install -r requirements.txt")
             sys.exit(1)
         except Exception as e:
             print(f"[ERROR] Dhan client init failed: {e}")
             sys.exit(1)
+
+        # 3. Load instruments master (try disk cache/download; fall back to
+        #    dhanhq.fetch_security_list() if the URL fetch fails)
+        self._set_status("Loading instruments master…")
+        if not self._stock_manager.initialise():
+            logger.warning("Instruments master (stock) URL load failed — trying fetch_security_list()")
+            self._stock_manager.initialise_from_dhan(self._dhan)
+        if not self._nifty_manager.initialise():
+            logger.warning("Instruments master (nifty) URL load failed — trying fetch_security_list()")
+            self._nifty_manager.initialise_from_dhan(self._dhan)
 
         # 4. Fetch Nifty index spot price
         self._set_status("Fetching Nifty index spot price…")

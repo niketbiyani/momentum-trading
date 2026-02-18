@@ -255,6 +255,24 @@ class OptionsManager:
         """Load instruments master. Must be called once before resolve()."""
         return self._master.load()
 
+    def initialise_from_dhan(self, dhan_client) -> bool:
+        """Fallback: load instruments master via dhanhq.fetch_security_list()."""
+        try:
+            logger.info("Trying fetch_security_list('compact') for Nifty instruments master…")
+            df = dhan_client.fetch_security_list('compact')
+            if df is None or df.empty:
+                logger.warning("fetch_security_list returned empty DataFrame")
+                return False
+            logger.info(f"fetch_security_list: {len(df)} rows, columns: {list(df.columns)}")
+            self._master._df = df
+            self._master._col_map = {}
+            self._master._resolve_columns()
+            logger.info(f"Nifty instruments master col_map: {self._master._col_map}")
+            return True
+        except Exception as e:
+            logger.error(f"Nifty instruments master fallback failed: {e}", exc_info=True)
+            return False
+
     def update_spot(self, spot_price: float) -> bool:
         """
         Update Nifty spot price. Returns True if ATM strike changed

@@ -267,152 +267,79 @@ class StockOptionsManager:
         )
         return instruments, eq_ids
 
+    def initialise_from_dhan(self, dhan_client) -> bool:
+        """Fallback: load instruments master via dhanhq.fetch_security_list()."""
+        try:
+            logger.info("Trying fetch_security_list('compact') as instruments master fallback…")
+            df = dhan_client.fetch_security_list('compact')
+            if df is None or df.empty:
+                logger.warning("fetch_security_list returned empty DataFrame")
+                return False
+            logger.info(f"fetch_security_list returned {len(df)} rows, columns: {list(df.columns)}")
+            self._master._df = df
+            self._master._col_map = {}
+            self._master._resolve_columns()
+            logger.info(f"Instruments master loaded via fetch_security_list — col_map: {self._master._col_map}")
+            return True
+        except Exception as e:
+            logger.error(f"fetch_security_list fallback failed: {e}", exc_info=True)
+            return False
+
     def fetch_spot_prices(self, dhan_client) -> dict[str, float]:
         """
-        Fetch current spot prices for all Nifty 50 stocks via Dhan REST API.
-        Tries dhanhq library methods first, then falls back to direct HTTP call.
+        Fetch current spot prices for all Nifty 50 stocks via dhan.ticker_data().
+        ticker_data() is dhanhq v2's official LTP method — uses the library's own
+        session + headers so auth is guaranteed to match.
         """
         spot_prices: dict[str, float] = {}
-        symbols = list(NIFTY50_STOCKS.keys())
 
-        # First, get equity security IDs from the instruments master
+        # Get equity security IDs from the instruments master
         eq_ids: dict[str, str] = {}
-        for sym in symbols:
+        for sym in list(NIFTY50_STOCKS.keys()):
             sid = self._master.find_equity_security_id(sym)
             if sid:
                 eq_ids[sym] = sid
             else:
-                logger.debug(f"No EQ security ID found for {sym}")
+                logger.debug(f"No EQ security ID for {sym}")
 
         if not eq_ids:
-            logger.warning("No equity security IDs found — cannot fetch spot prices")
+            logger.warning(
+                "No equity security IDs found — instruments master may not have loaded. "
+                "Stock spots will be unavailable until the feed delivers ticks."
+            )
             return spot_prices
 
-        # Try each possible method name across dhanhq versions
-        sec_ids = [int(sid) for sid in eq_ids.values() if sid.isdigit()]
-        rev = {sid: sym for sym, sid in eq_ids.items()}
+        logger.info(f"Fetching spot prices for {len(eq_ids)} stocks via ticker_data()")
+        sid_to_sym = {v: k for k, v in eq_ids.items()}
+        sec_ids    = [int(v) for v in eq_ids.values() if str(v).isdigit()]
 
-        _batch_methods = [
-            ("get_market_feed_quote", lambda m: m(securities={"NSE_EQ": sec_ids})),
-            ("get_ltp",               lambda m: m({"NSE_EQ": sec_ids})),
-            ("get_ltp_data",          lambda m: m({"NSE_EQ": sec_ids})),
-            ("market_feed_quote",     lambda m: m({"NSE_EQ": sec_ids})),
-        ]
-
-        for method_name, caller in _batch_methods:
-            fn = getattr(dhan_client, method_name, None)
-            if fn is None:
-                continue
+        # Dhan accepts up to 100 security IDs per call
+        for i in range(0, len(sec_ids), 100):
+            chunk = sec_ids[i : i + 100]
             try:
-                resp = caller(fn)
-                data = resp.get("data", {})
-                rows = data.get("NSE_EQ", data)
-                if isinstance(rows, dict):
-                    for sec_id_str, quote in rows.items():
-                        if not isinstance(quote, dict):
-                            continue
-                        ltp = float(
-                            quote.get("last_price", 0)
-                            or quote.get("LTP", 0)
-                            or quote.get("ltp", 0)
-                        )
-                        sym = rev.get(sec_id_str) or rev.get(str(int(float(sec_id_str))))
-                        if sym and ltp > 0:
-                            spot_prices[sym] = ltp
-                if spot_prices:
-                    logger.info(
-                        f"Fetched spot prices for {len(spot_prices)}/{len(symbols)} "
-                        f"stocks via {method_name}"
-                    )
-                    break
+                result = dhan_client.ticker_data({"NSE_EQ": chunk})
+                status = result.get("status")
+                logger.info(f"ticker_data batch {i//100+1}: status={status} remarks={result.get('remarks')}")
+
+                if status == "success":
+                    # result['data'] = raw API JSON = {"data": {"NSE_EQ": {sid: {...}}}}
+                    nse_rows = result.get("data", {}).get("data", {}).get("NSE_EQ", {})
+                    if not nse_rows:
+                        logger.warning(f"ticker_data returned no NSE_EQ rows. Raw: {str(result.get('data',''))[:300]}")
+                    for sid_str, info in nse_rows.items():
+                        sym = sid_to_sym.get(sid_str)
+                        if not sym:
+                            sym = sid_to_sym.get(str(int(float(sid_str))))
+                        if sym:
+                            price = float(info.get("last_price", 0) or 0)
+                            if price > 0:
+                                spot_prices[sym] = price
+                else:
+                    logger.warning(f"ticker_data failure: {result.get('remarks')}")
             except Exception as e:
-                logger.debug(f"{method_name} failed: {e}")
+                logger.error(f"ticker_data call failed: {e}", exc_info=True)
 
-        # Fallback: direct HTTP call to Dhan LTP endpoint
-        if not spot_prices:
-            logger.info("dhanhq methods unavailable — trying direct HTTP LTP endpoint")
-            spot_prices = self._fetch_stocks_via_http(dhan_client, eq_ids)
-
-        if not spot_prices:
-            logger.warning("All spot-price fetch methods failed")
-
-        return spot_prices
-
-    def _fetch_stocks_via_http(
-        self, dhan_client, eq_ids: dict[str, str]
-    ) -> dict[str, float]:
-        """Fetch stock spot prices via direct HTTP POST to Dhan's LTP endpoint."""
-        import requests as req
-
-        spot_prices: dict[str, float] = {}
-
-        # Prefer the client's own header dict (dhanhq v2 exposes this); fall back
-        # to individual attributes and finally to the config env-var values.
-        built_in_headers = getattr(dhan_client, "header", None)
-        if built_in_headers and built_in_headers.get("access-token"):
-            headers = dict(built_in_headers)
-            headers["Content-Type"] = "application/json"
-        else:
-            access_token = (
-                str(getattr(dhan_client, "access_token", "") or "")
-                or str(getattr(dhan_client, "token", "") or "")
-                or DHAN_ACCESS_TOKEN
-            )
-            client_id = (
-                str(getattr(dhan_client, "client_id", "") or "")
-                or str(getattr(dhan_client, "clientId", "") or "")
-                or DHAN_CLIENT_ID
-            )
-            if not access_token or not client_id:
-                logger.warning("Missing Dhan credentials for HTTP LTP call")
-                return spot_prices
-            headers = {
-                "Content-Type": "application/json",
-                "access-token": access_token,
-                "client-id":    client_id,
-            }
-
-        rev     = {sid: sym for sym, sid in eq_ids.items()}
-        sec_ids = [int(sid) for sid in eq_ids.values() if sid.isdigit()]
-
-        try:
-            resp = req.post(
-                "https://api.dhan.co/v2/marketfeed/ltp",
-                json={"NSE_EQ": sec_ids},
-                headers=headers,
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json().get("data", {})
-            rows = data.get("NSE_EQ") or data   # handle nested or flat response
-
-            if isinstance(rows, dict):
-                for sec_id_str, quote in rows.items():
-                    if not isinstance(quote, dict):
-                        continue
-                    ltp = float(
-                        quote.get("last_price", 0)
-                        or quote.get("LTP", 0)
-                        or quote.get("ltp", 0)
-                    )
-                    sym = rev.get(sec_id_str)
-                    if not sym:
-                        try:
-                            sym = rev.get(str(int(float(sec_id_str))))
-                        except (ValueError, TypeError):
-                            pass
-                    if sym and ltp > 0:
-                        spot_prices[sym] = ltp
-
-            if spot_prices:
-                logger.info(
-                    f"HTTP LTP: fetched {len(spot_prices)}/{len(eq_ids)} spot prices"
-                )
-            else:
-                logger.warning(f"HTTP LTP returned no usable data: {resp.text[:200]}")
-        except Exception as e:
-            logger.warning(f"HTTP LTP fallback failed: {e}")
-
+        logger.info(f"Spot prices fetched: {len(spot_prices)}/{len(eq_ids)} stocks")
         return spot_prices
 
     @property
@@ -425,62 +352,30 @@ class StockOptionsManager:
 
 def fetch_nifty_spot(dhan_client) -> float:
     """
-    Fetch the current Nifty 50 index spot price via Dhan's HTTP LTP endpoint.
-    Returns 0.0 if unavailable (off-hours, network error, etc.).
+    Fetch the current Nifty 50 index spot price via dhan.ticker_data().
+    Uses the library's own session + credentials — no manual header building.
+    Returns 0.0 on failure (feed ticks will supply the real price instead).
     """
-    import requests as req
+    from config import NIFTY_SECURITY_ID
+    try:
+        result = dhan_client.ticker_data({"IDX_I": [int(NIFTY_SECURITY_ID)]})
+        status = result.get("status")
+        logger.info(f"Nifty spot ticker_data: status={status} remarks={result.get('remarks')}")
 
-    built_in_headers = getattr(dhan_client, "header", None)
-    if built_in_headers and built_in_headers.get("access-token"):
-        headers = dict(built_in_headers)
-        headers["Content-Type"] = "application/json"
-    else:
-        access_token = (
-            str(getattr(dhan_client, "access_token", "") or "")
-            or str(getattr(dhan_client, "token", "") or "")
-            or DHAN_ACCESS_TOKEN
-        )
-        client_id = (
-            str(getattr(dhan_client, "client_id", "") or "")
-            or str(getattr(dhan_client, "clientId", "") or "")
-            or DHAN_CLIENT_ID
-        )
-        if not access_token or not client_id:
-            logger.warning("Cannot fetch Nifty spot: missing credentials")
-            return 0.0
-        headers = {
-            "Content-Type": "application/json",
-            "access-token": access_token,
-            "client-id":    client_id,
-        }
+        if status == "success":
+            # result['data'] = raw API JSON = {"data": {"IDX_I": {sid: {"last_price": ...}}}}
+            idx_rows = result.get("data", {}).get("data", {}).get("IDX_I", {})
+            if not idx_rows:
+                logger.warning(f"No IDX_I data in response: {str(result.get('data',''))[:300]}")
+            for sid_str, info in idx_rows.items():
+                price = float(info.get("last_price", 0) or 0)
+                if price > 0:
+                    logger.info(f"Nifty 50 spot: ₹{price:,.2f}")
+                    return price
+        else:
+            logger.warning(f"Nifty spot ticker_data failure: {result.get('remarks')}")
+    except Exception as e:
+        logger.error(f"fetch_nifty_spot error: {e}", exc_info=True)
 
-    # Try different segment key names used by different Dhan API versions
-    for seg_key in ("IDX_I", "NSE_IDX", "NSE_INDEX"):
-        try:
-            resp = req.post(
-                "https://api.dhan.co/v2/marketfeed/ltp",
-                json={seg_key: [13]},
-                headers=headers,
-                timeout=10,
-            )
-            if not resp.ok:
-                continue
-            data = resp.json().get("data", {})
-            rows = data.get(seg_key) or data
-            if isinstance(rows, dict):
-                for _, quote in rows.items():
-                    if not isinstance(quote, dict):
-                        continue
-                    ltp = float(
-                        quote.get("last_price", 0)
-                        or quote.get("LTP", 0)
-                        or quote.get("ltp", 0)
-                    )
-                    if ltp > 0:
-                        logger.info(f"Nifty spot fetched via {seg_key}: {ltp}")
-                        return ltp
-        except Exception as e:
-            logger.debug(f"Nifty spot fetch via {seg_key}: {e}")
-
-    logger.warning("Could not fetch Nifty spot price; will use feed ticks instead")
+    logger.warning("Nifty spot unavailable via REST — will update from WebSocket feed ticks")
     return 0.0
