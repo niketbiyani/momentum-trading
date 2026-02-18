@@ -33,10 +33,14 @@ LOOKBACK_PERIODS = list(range(LOOKBACK_START, LOOKBACK_END + 1, LOOKBACK_STEP)) 
 
 # ── Timeframes ─────────────────────────────────────────────────────────────────
 TIMEFRAMES = {
-    "5s": 5,
+    "5s":  5,
     "15s": 15,
-    "1m": 60,
+    "1m":  60,
+    "3m":  180,
 }
+# Which TF labels to show in each tab
+NIFTY_TIMEFRAMES  = ["5s", "15s", "1m"]   # Nifty index options tab
+STOCK_TIMEFRAMES  = ["1m", "3m"]           # Nifty 50 stocks tab
 
 # ── Nifty / Options Settings ──────────────────────────────────────────────────
 NIFTY_SECURITY_ID = "13"         # Nifty 50 index security ID on Dhan

@@ -30,11 +30,6 @@
 
   <!-- Controls only shown on Stocks tab -->
   <div id="stocks-controls">
-    <div class="tf-btns">
-      <button class="tf-btn" data-tf="5s">5s</button>
-      <button class="tf-btn" data-tf="15s">15s</button>
-      <button class="tf-btn active" data-tf="1m">1m</button>
-    </div>
     <div id="search-wrap">
       <input id="search" type="text" placeholder="Filter stock…" autocomplete="off" spellcheck="false">
     </div>
@@ -131,29 +126,35 @@
     <table id="instruments-table">
       <thead>
         <tr>
-          <th>Stock</th>
-          <th>Spot</th>
-          <th class="col-sep"></th>
+          <th rowspan="2" class="th-left">Stock</th>
+          <th rowspan="2">Spot</th>
+          <th class="col-sep" rowspan="2"></th>
           <!-- ATM CE -->
-          <th>CE LTP</th>
-          <th>CE Δ%</th>
-          <th>CE RSI</th>
-          <th>CE MACD-H</th>
-          <th title="10-bar % change">CE Spk%</th>
-          <th>CE Signal</th>
-          <th class="col-sep"></th>
+          <th rowspan="2">CE LTP</th>
+          <th rowspan="2">CE Δ%</th>
+          <th colspan="4" class="tf-group-hdr">── 1m ──</th>
+          <th colspan="4" class="tf-group-hdr">── 3m ──</th>
+          <th class="col-sep" rowspan="2"></th>
           <!-- ATM PE -->
-          <th>PE LTP</th>
-          <th>PE Δ%</th>
-          <th>PE RSI</th>
-          <th>PE MACD-H</th>
-          <th title="10-bar % change">PE Spk%</th>
-          <th>PE Signal</th>
+          <th rowspan="2">PE LTP</th>
+          <th rowspan="2">PE Δ%</th>
+          <th colspan="4" class="tf-group-hdr">── 1m ──</th>
+          <th colspan="4" class="tf-group-hdr">── 3m ──</th>
+        </tr>
+        <tr>
+          <!-- CE 1m -->
+          <th>RSI</th><th>MACD</th><th title="10-bar %Δ">Spk%</th><th>Sig</th>
+          <!-- CE 3m -->
+          <th>RSI</th><th>MACD</th><th title="10-bar %Δ">Spk%</th><th>Sig</th>
+          <!-- PE 1m -->
+          <th>RSI</th><th>MACD</th><th title="10-bar %Δ">Spk%</th><th>Sig</th>
+          <!-- PE 3m -->
+          <th>RSI</th><th>MACD</th><th title="10-bar %Δ">Spk%</th><th>Sig</th>
         </tr>
       </thead>
       <tbody id="table-body">
         <tr>
-          <td colspan="13" class="empty-msg">Waiting for data…</td>
+          <td colspan="24" class="empty-msg">Waiting for data…</td>
         </tr>
       </tbody>
     </table>

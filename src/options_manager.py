@@ -95,12 +95,15 @@ class InstrumentsMaster:
                 age_hours = (datetime.now().timestamp() - mtime) / 3600
                 if age_hours < 12:  # Cache is fresh (< 12 hours old)
                     try:
-                        self._df = pd.read_csv(INSTRUMENTS_CACHE_FILE, low_memory=False)
+                        df = pd.read_csv(INSTRUMENTS_CACHE_FILE, low_memory=False)
+                        self._df = df
                         self._resolve_columns()
                         logger.info(f"Loaded instruments master from cache ({len(self._df)} rows)")
                         return True
                     except Exception as e:
                         logger.warning(f"Cache read failed: {e}. Re-downloading.")
+                        self._df = None
+                        self._col_map = {}
 
             return self._download()
 
@@ -109,29 +112,63 @@ class InstrumentsMaster:
             logger.info(f"Downloading instruments master from {DHAN_INSTRUMENTS_CSV_URL} ...")
             resp = requests.get(DHAN_INSTRUMENTS_CSV_URL, timeout=30)
             resp.raise_for_status()
-            self._df = pd.read_csv(io.StringIO(resp.text), low_memory=False)
+            df = pd.read_csv(io.StringIO(resp.text), low_memory=False)
+            self._df = df
             self._resolve_columns()
             # Save cache
             self._df.to_csv(INSTRUMENTS_CACHE_FILE, index=False)
             logger.info(f"Downloaded {len(self._df)} instruments, cache saved.")
             return True
         except Exception as e:
-            logger.error(f"Failed to download instruments master: {e}")
+            logger.error(f"Failed to download instruments master: {e}", exc_info=True)
+            self._df = None   # ← reset so is-None checks work correctly
+            self._col_map = {}
             return False
 
     def _resolve_columns(self) -> None:
-        """Map our logical column names to actual CSV column names."""
-        cols = set(self._df.columns)
+        """
+        Map logical column names to actual CSV column names.
+        1. Try exact match against known aliases (case-insensitive).
+        2. Fall back to fuzzy substring matching for critical columns.
+        Always logs the actual CSV columns so we can diagnose mismatches.
+        """
+        cols = list(self._df.columns)
+        cols_upper_map = {c.upper(): c for c in cols}  # upper → actual name
+        logger.info(f"Instruments CSV columns ({len(cols)}): {cols}")
+
+        # Pass 1: exact match against aliases (case-insensitive)
         for logical, candidates in self._COL_ALIASES.items():
             for c in candidates:
-                if c in cols:
-                    self._col_map[logical] = c
+                if c.upper() in cols_upper_map:
+                    self._col_map[logical] = cols_upper_map[c.upper()]
                     break
+
+        # Pass 2: fuzzy substring match for any still-missing columns
+        _FUZZY: dict[str, callable] = {
+            "security_id": lambda u: ("SECURITY" in u and "ID" in u) or u.endswith("_ID"),
+            "symbol":      lambda u: "SYMBOL" in u,
+            "instrument":  lambda u: "INSTRUMENT" in u,
+            "expiry":      lambda u: "EXPIRY" in u or "EXPIR" in u,
+            "strike":      lambda u: "STRIKE" in u,
+            "option_type": lambda u: "OPTION" in u and "TYPE" in u,
+            "segment":     lambda u: "SEGMENT" in u,
+        }
+        for logical, test_fn in _FUZZY.items():
+            if logical not in self._col_map:
+                hits = [c for c in cols if test_fn(c.upper())]
+                if hits:
+                    self._col_map[logical] = hits[0]
+                    logger.info(f"Fuzzy-matched column '{logical}' → '{hits[0]}'")
+
+        logger.info(f"Column map resolved: {self._col_map}")
+
         missing = [k for k in ["security_id", "symbol", "expiry", "strike", "option_type"]
                    if k not in self._col_map]
         if missing:
-            raise ValueError(f"Could not find columns for: {missing}. "
-                             f"Available: {list(self._df.columns)}")
+            raise ValueError(
+                f"Could not find columns for: {missing}. "
+                f"Available columns: {cols}"
+            )
 
     def find_option(
         self,

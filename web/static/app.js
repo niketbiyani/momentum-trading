@@ -138,44 +138,34 @@ function optRowClass(ceOpt, peOpt) {
   return '';
 }
 
-function optCell(opt, tf) {
-  if (!opt) return '<td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>';
-  const ind  = (opt.indicators || {})[tf] || {};
-  const ltp  = opt.ltp > 0 ? fmt(opt.ltp) : '—';
-  const dPct = opt.ltp_change_pct;
-  const rsi  = ind.rsi  != null ? ind.rsi  : opt.rsi;
-  const mh   = ind.macd_hist != null ? ind.macd_hist : opt.macd_hist;
-  const spk  = ind.spk10 != null ? ind.spk10 : null;
-  const spkStr = spk != null
-    ? (spk >= 0 ? '+' : '') + spk.toFixed(1) + '%'
-    : '—';
-  return `
-    <td>${ltp}</td>
-    <td class="${deltaClass(dPct)}">${fmtPct(dPct)}</td>
-    <td class="${rsiClass(rsi)}">${fmtRsi(rsi)}</td>
-    <td class="${deltaClass(mh)}">${mh != null ? (mh >= 0 ? '+' : '') + fmt(mh, 3) : '—'}</td>
-    <td class="${spkClass(spk)}" style="${spk != null ? heatBg(spk) ? 'background:' + heatBg(spk) + ';' : '' : ''}">${spkStr}</td>
-    <td>${sigBadge(opt)}</td>`;
-}
-
-// ── Nifty multi-TF cell (uses per-TF indicator + signal from indicators dict) ──
-function niftyTfCells(opt) {
-  const TFS = ['5s', '15s', '1m'];
+// ── Multi-TF cells helper ────────────────────────────────────────────────────
+// Renders RSI | MACD | Spk% | Signal cells for each TF in the list
+function tfCells(opt, tfList) {
   let cells = '';
-  for (const tf of TFS) {
+  for (const tf of tfList) {
     const ind = (opt && opt.indicators) ? (opt.indicators[tf] || {}) : {};
-    const rsi = ind.rsi  != null ? ind.rsi  : null;
+    const rsi = ind.rsi       != null ? ind.rsi       : null;
     const mh  = ind.macd_hist != null ? ind.macd_hist : null;
+    const spk = ind.spk10     != null ? ind.spk10     : null;
+    const spkStr = spk != null ? (spk >= 0 ? '+' : '') + spk.toFixed(1) + '%' : '—';
+    const spkStyle = spk != null && heatBg(spk) ? `style="background:${heatBg(spk)}"` : '';
     const sigObj = ind.signal_status
       ? { signal_status: ind.signal_status, signal_direction: ind.signal_direction }
       : null;
     cells += `
       <td class="${rsiClass(rsi)}">${fmtRsi(rsi)}</td>
       <td class="${deltaClass(mh)}">${mh != null ? (mh >= 0 ? '+' : '') + fmt(mh, 3) : '—'}</td>
+      <td class="${spkClass(spk)}" ${spkStyle}>${spkStr}</td>
       <td>${sigBadge(sigObj)}</td>`;
   }
   return cells;
 }
+
+// Nifty tab: 5s / 15s / 1m
+function niftyTfCells(opt) { return tfCells(opt, ['5s', '15s', '1m']); }
+
+// Stocks tab: 1m / 3m
+function stockTfCells(opt) { return tfCells(opt, ['1m', '3m']); }
 
 // ── Render dispatcher ─────────────────────────────────────────────────────────
 function render() {
@@ -186,7 +176,6 @@ function render() {
   } else {
     renderTable();
     renderSignals();
-    updateTfButtons();
   }
 }
 
@@ -283,7 +272,7 @@ function renderTable() {
     .sort();
 
   if (!keys.length) {
-    tbody.innerHTML = `<tr><td colspan="13" class="empty-msg">No data yet — connecting to feed…</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="24" class="empty-msg">No data yet — connecting to feed…</td></tr>`;
     return;
   }
 
@@ -291,18 +280,39 @@ function renderTable() {
     const s  = stocks[sym];
     const ce = s.options && s.options.CE;
     const pe = s.options && s.options.PE;
-    const rowClass = optRowClass(ce, pe);
-    const spot     = s.spot > 0
+
+    // Row highlight: any 1m/3m signal on CE or PE
+    let rowClass = '';
+    for (const opt of [ce, pe]) {
+      if (!opt) continue;
+      for (const tf of ['1m', '3m']) {
+        const ind = (opt.indicators || {})[tf] || {};
+        if (ind.signal_status === 'ENTRY') { rowClass = 'has-signal-ENTRY'; break; }
+        if (ind.signal_status === 'WATCH')   rowClass = 'has-signal-WATCH';
+      }
+      if (rowClass === 'has-signal-ENTRY') break;
+    }
+
+    const spot = s.spot > 0
       ? `₹${Number(s.spot).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       : '—';
+
+    const ceLtp  = ce && ce.ltp > 0 ? '₹' + fmt(ce.ltp) : '—';
+    const ceDpct = ce ? ce.ltp_change_pct : null;
+    const peLtp  = pe && pe.ltp > 0 ? '₹' + fmt(pe.ltp) : '—';
+    const peDpct = pe ? pe.ltp_change_pct : null;
 
     return `<tr class="${rowClass}">
       <td class="col-stock">${sym}</td>
       <td class="col-spot">${spot}</td>
       <td class="col-sep"></td>
-      ${optCell(ce, activeTf)}
+      <td class="opt-ce">${ceLtp}</td>
+      <td class="${deltaClass(ceDpct)}">${fmtPct(ceDpct)}</td>
+      ${stockTfCells(ce)}
       <td class="col-sep"></td>
-      ${optCell(pe, activeTf)}
+      <td class="opt-pe">${peLtp}</td>
+      <td class="${deltaClass(peDpct)}">${fmtPct(peDpct)}</td>
+      ${stockTfCells(pe)}
     </tr>`;
   });
 
