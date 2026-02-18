@@ -286,40 +286,49 @@ class StockOptionsManager:
             logger.warning("No equity security IDs found — cannot fetch spot prices")
             return spot_prices
 
-        # Batch request via get_market_feed_quote
-        try:
-            sec_ids = [int(sid) for sid in eq_ids.values() if sid.isdigit()]
-            resp = dhan_client.get_market_feed_quote(
-                securities={"NSE_EQ": sec_ids}
-            )
-            data = resp.get("data", {}).get("NSE_EQ", {})
-            # Build reverse map: security_id -> symbol
-            rev = {sid: sym for sym, sid in eq_ids.items()}
-            for sec_id_str, quote in data.items():
-                ltp = float(quote.get("last_price", 0) or quote.get("LTP", 0))
-                sym = rev.get(sec_id_str) or rev.get(str(int(float(sec_id_str))))
-                if sym and ltp > 0:
-                    spot_prices[sym] = ltp
-            logger.info(f"Fetched spot prices for {len(spot_prices)}/{len(symbols)} stocks via batch API")
-        except Exception as e:
-            logger.warning(f"Batch spot fetch failed: {e}. Trying LTP endpoint...")
+        # Try each possible method name across dhanhq versions
+        sec_ids = [int(sid) for sid in eq_ids.values() if sid.isdigit()]
+        rev = {sid: sym for sym, sid in eq_ids.items()}
 
-        # Fallback: individual LTP calls for any missing stocks
-        missing = [sym for sym in symbols if sym not in spot_prices and sym in eq_ids]
-        for sym in missing[:10]:   # limit fallback calls to avoid rate limits
+        _batch_methods = [
+            # dhanhq v2.1+
+            ("get_market_feed_quote", lambda m: m(securities={"NSE_EQ": sec_ids})),
+            # dhanhq v2.0
+            ("get_ltp",               lambda m: m({"NSE_EQ": sec_ids})),
+            ("get_ltp_data",          lambda m: m({"NSE_EQ": sec_ids})),
+            ("market_feed_quote",     lambda m: m({"NSE_EQ": sec_ids})),
+        ]
+
+        for method_name, caller in _batch_methods:
+            fn = getattr(dhan_client, method_name, None)
+            if fn is None:
+                continue
             try:
-                sid = eq_ids[sym]
-                resp = dhan_client.get_last_traded_price(
-                    securities={"NSE_EQ": [int(sid)]}
-                )
+                resp = caller(fn)
                 data = resp.get("data", {})
-                for _, val in data.items():
-                    ltp = float(val.get("LTP", 0) or val.get("last_price", 0))
-                    if ltp > 0:
-                        spot_prices[sym] = ltp
-                        break
+                # response may be nested under exchange key or flat
+                rows = data.get("NSE_EQ", data)
+                if isinstance(rows, dict):
+                    for sec_id_str, quote in rows.items():
+                        ltp = float(
+                            quote.get("last_price", 0)
+                            or quote.get("LTP", 0)
+                            or quote.get("ltp", 0)
+                        )
+                        sym = rev.get(sec_id_str) or rev.get(str(int(float(sec_id_str))))
+                        if sym and ltp > 0:
+                            spot_prices[sym] = ltp
+                if spot_prices:
+                    logger.info(
+                        f"Fetched spot prices for {len(spot_prices)}/{len(symbols)} "
+                        f"stocks via {method_name}"
+                    )
+                    break
             except Exception as e:
-                logger.debug(f"LTP fetch failed for {sym}: {e}")
+                logger.debug(f"{method_name} failed: {e}")
+
+        if not spot_prices:
+            logger.warning("All batch spot-price methods failed — no spot prices available")
 
         return spot_prices
 

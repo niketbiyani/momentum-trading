@@ -117,7 +117,6 @@ def _start_dhan_feed(instruments: list[tuple]) -> threading.Thread:
                 client_id=DHAN_CLIENT_ID,
                 access_token=DHAN_ACCESS_TOKEN,
                 instruments=instruments,
-                subscription_type=marketfeed.Ticker,
                 on_message=_on_message,
             )
             logger.info(f"DhanFeed started with {len(instruments)} instruments")

@@ -109,7 +109,7 @@ async def _broadcast_task() -> None:
                 await ws.send_text(payload)
             except Exception:
                 dead.add(ws)
-        _clients -= dead
+        _clients.difference_update(dead)
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
