@@ -56,6 +56,7 @@ class OptionInfo:
     option_type: str       # "CE" or "PE"
     expiry: str            # "YYYY-MM-DD"
     label: str             # Human-readable label e.g. "ATM CE"
+    underlying: str = ""   # Underlying symbol e.g. "NIFTY", "RELIANCE"
 
 
 class SignalStatus:
@@ -81,6 +82,7 @@ class Signal:
     macd_hist: float
     status: str            # SignalStatus constant
     message: str = ""
+    underlying: str = ""   # Underlying symbol e.g. "NIFTY", "RELIANCE"
 
     def __repr__(self) -> str:
         return (

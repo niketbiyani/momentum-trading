@@ -7,6 +7,10 @@ load_dotenv()
 DHAN_CLIENT_ID = os.getenv("DHAN_CLIENT_ID", "")
 DHAN_ACCESS_TOKEN = os.getenv("DHAN_ACCESS_TOKEN", "")
 
+# ── Web Server ─────────────────────────────────────────────────────────────────
+WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
+WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
+
 # ── Spike Detection ───────────────────────────────────────────────────────────
 SPIKE_THRESHOLD_PCT = float(os.getenv("SPIKE_THRESHOLD_PCT", "5.0"))
 RSI_OVERBOUGHT = float(os.getenv("RSI_OVERBOUGHT", "70"))
@@ -45,3 +49,62 @@ INSTRUMENTS_CACHE_FILE = ".instruments_cache.csv"
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 DASHBOARD_REFRESH_INTERVAL = 0.5  # seconds
+
+# ── Nifty 50 Constituent Stocks ───────────────────────────────────────────────
+# Keys are NSE trading symbols. Values are F&O strike step sizes (in ₹).
+# Stock options use monthly expiry (last Thursday of the month).
+NIFTY50_STOCKS: dict[str, int] = {
+    "ADANIENT":   50,
+    "ADANIPORTS": 20,
+    "APOLLOHOSP": 50,
+    "ASIANPAINT": 50,
+    "AXISBANK":   10,
+    "BAJAJ-AUTO": 100,
+    "BAJFINANCE": 100,
+    "BAJAJFINSV": 50,
+    "BPCL":       5,
+    "BHARTIARTL": 20,
+    "BRITANNIA":  100,
+    "CIPLA":      20,
+    "COALINDIA":  5,
+    "DIVISLAB":   100,
+    "DRREDDY":    100,
+    "EICHERMOT":  100,
+    "GRASIM":     50,
+    "HCLTECH":    20,
+    "HDFCBANK":   10,
+    "HDFCLIFE":   10,
+    "HEROMOTOCO": 100,
+    "HINDALCO":   10,
+    "HINDUNILVR": 50,
+    "ICICIBANK":  10,
+    "INDUSINDBK": 20,
+    "INFY":       20,
+    "ITC":        5,
+    "JSWSTEEL":   20,
+    "KOTAKBANK":  20,
+    "LT":         50,
+    "LTIM":       100,
+    "MARUTI":     100,
+    "NESTLEIND":  100,
+    "NTPC":       5,
+    "ONGC":       5,
+    "POWERGRID":  5,
+    "RELIANCE":   20,
+    "SBILIFE":    20,
+    "SHRIRAMFIN": 50,
+    "SBIN":       10,
+    "SUNPHARMA":  20,
+    "TCS":        50,
+    "TATACONSUM": 20,
+    "TATAMOTORS": 20,
+    "TATASTEEL":  5,
+    "TECHM":      20,
+    "TITAN":      50,
+    "TRENT":      50,
+    "ULTRACEMCO": 100,
+    "WIPRO":      10,
+}
+
+# Backfill stock options at startup (set False to skip API calls for all 50 stocks)
+BACKFILL_STOCK_OPTIONS = os.getenv("BACKFILL_STOCK_OPTIONS", "false").lower() == "true"

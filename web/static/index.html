@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Options Spike Detector</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap">
+</head>
+<body>
+
+<!-- ── Connecting overlay ─────────────────────────────────────────────────── -->
+<div id="connecting" class="visible">
+  <div class="spinner"></div>
+  <div>Connecting to feed…</div>
+</div>
+
+<!-- ── Header ────────────────────────────────────────────────────────────── -->
+<div id="header">
+  <h1>OPTIONS SPIKE DETECTOR</h1>
+  <div id="status-dot"></div>
+  <span id="status-text">Starting…</span>
+
+  <div class="tf-btns">
+    <button class="tf-btn" data-tf="5s">5s</button>
+    <button class="tf-btn" data-tf="15s">15s</button>
+    <button class="tf-btn active" data-tf="1m">1m</button>
+  </div>
+
+  <div id="search-wrap">
+    <input id="search" type="text" placeholder="Filter stock…" autocomplete="off" spellcheck="false">
+  </div>
+
+  <div id="clock">--:--:-- IST</div>
+</div>
+
+<!-- ── Main ──────────────────────────────────────────────────────────────── -->
+<div id="main">
+
+  <!-- Instruments table -->
+  <div id="table-wrap">
+    <table id="instruments-table">
+      <thead>
+        <tr>
+          <th>Stock</th>
+          <th>Spot</th>
+          <th class="col-sep"></th>
+          <!-- ATM CE -->
+          <th>CE LTP</th>
+          <th>CE Δ%</th>
+          <th>CE RSI</th>
+          <th>CE MACD-H</th>
+          <th>CE Signal</th>
+          <th class="col-sep"></th>
+          <!-- ATM PE -->
+          <th>PE LTP</th>
+          <th>PE Δ%</th>
+          <th>PE RSI</th>
+          <th>PE MACD-H</th>
+          <th>PE Signal</th>
+        </tr>
+      </thead>
+      <tbody id="table-body">
+        <tr>
+          <td colspan="13" class="empty-msg">Waiting for data…</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Signals panel -->
+  <div id="signals-wrap">
+    <div id="signals-header">Signals ▲▼</div>
+    <div id="signals-list">
+      <div class="empty-msg">No signals yet</div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

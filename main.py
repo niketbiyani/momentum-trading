@@ -1,26 +1,26 @@
 """
-main.py — Nifty Options Spike Detector
+main.py — Options Spike Detector (Nifty 50 Stocks Edition)
 
 Entry point that wires together:
-  - Dhan market feed (websocket ticks)
+  - Dhan market feed (websocket ticks for 50 stocks + their options)
   - Multi-timeframe bar builder
   - Indicator engine (RSI, MACD, lookback table)
   - Spike detector / signal engine
-  - Rich terminal dashboard
+  - FastAPI web dashboard (replaces terminal UI)
 
 Architecture (threads):
   ┌─────────────────────────────────────────────────────┐
-  │ feed_thread   DhanFeed.run_forever()                │
-  │                 → on_tick() → tick_queue            │
+  │ web-server thread   uvicorn (FastAPI + WebSocket)   │
   ├─────────────────────────────────────────────────────┤
-  │ main_thread   process loop (100 ms tick)            │
-  │                 → drain tick_queue                  │
-  │                 → BarBuilder.add_tick()             │
-  │                 → IndicatorEngine.compute()         │
-  │                 → SpikeDetector.evaluate()          │
-  │                 → Dashboard.update_state()          │
+  │ dhan-feed thread    DhanFeed.run_forever()          │
+  │                       → on_tick() → tick_queue      │
   ├─────────────────────────────────────────────────────┤
-  │ display_thread  Dashboard.run()                     │
+  │ processor thread    100ms loop                      │
+  │                       → drain tick_queue            │
+  │                       → BarBuilder.on_tick()        │
+  │                       → IndicatorEngine.compute()   │
+  │                       → SpikeDetector.evaluate()    │
+  │                       → web.server.update_state()   │
   └─────────────────────────────────────────────────────┘
 
 Usage:
@@ -28,6 +28,7 @@ Usage:
   # Fill in DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN
   pip install -r requirements.txt
   python main.py
+  # Open http://localhost:8000 in your browser
 """
 import logging
 import queue
@@ -42,7 +43,7 @@ from typing import Optional
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.FileHandler("spike_detector.log")],   # log to file only (don't pollute terminal)
+    handlers=[logging.FileHandler("spike_detector.log")],
 )
 logger = logging.getLogger(__name__)
 
@@ -51,36 +52,31 @@ from config import (
     DHAN_CLIENT_ID,
     DHAN_ACCESS_TOKEN,
     TIMEFRAMES,
-    DASHBOARD_REFRESH_INTERVAL,
     NIFTY_SECURITY_ID,
+    NIFTY50_STOCKS,
+    BACKFILL_STOCK_OPTIONS,
+    WEB_HOST,
+    WEB_PORT,
 )
-from src.models import Tick, InstrumentState, OptionInfo
+from src.models import Tick, InstrumentState, OptionInfo, Signal
 from src.bar_builder import MultiInstrumentBarBuilder
 from src.indicators import IndicatorEngine
-from src.options_manager import OptionsManager
+from src.stock_manager import StockOptionsManager
 from src.spike_detector import SignalEngine
-from src.dashboard import Dashboard
+from web.server import start_server, update_state
 
-
-# ── Dhan exchange / subscription constants ─────────────────────────────────────
-# These match the dhanhq.marketfeed module constants
-IDX_I   = 0    # NSE Index (Nifty spot)
+# ── Dhan exchange segment constants ───────────────────────────────────────────
+IDX_I   = 0    # NSE Index
+NSE_EQ  = 1    # NSE Equity (stock spot prices)
 NSE_FNO = 2    # NSE Futures & Options
 
+# ── Tick queue (feed thread → processor thread) ────────────────────────────────
+_tick_queue: queue.Queue = queue.Queue(maxsize=10_000)
 
-# ── Tick queue (feed thread → main thread) ─────────────────────────────────────
-_tick_queue: queue.Queue = queue.Queue(maxsize=5000)
 
-
-# ── Dhan feed integration ──────────────────────────────────────────────────────
+# ── Tick parsing ──────────────────────────────────────────────────────────────
 
 def _parse_tick(data: dict) -> Optional[Tick]:
-    """
-    Convert a raw DhanFeed message dict into our Tick model.
-
-    DhanFeed packet keys (Ticker subscription):
-      type, exchange_segment, security_id, LTP, LTT (unix ms), LTQ, volume
-    """
     try:
         ltp = float(data.get("LTP", 0) or data.get("ltp", 0))
         if ltp <= 0:
@@ -88,39 +84,32 @@ def _parse_tick(data: dict) -> Optional[Tick]:
         sec_id = str(data.get("security_id", data.get("Security Id", "")))
         if not sec_id:
             return None
-
-        # LTT: Dhan sends unix timestamp in seconds or ms
         raw_ltt = data.get("LTT", data.get("ltt", 0)) or 0
-        if raw_ltt > 1e12:            # milliseconds
+        if raw_ltt > 1e12:
             ts = datetime.fromtimestamp(raw_ltt / 1000)
-        elif raw_ltt > 0:             # seconds
+        elif raw_ltt > 0:
             ts = datetime.fromtimestamp(raw_ltt)
         else:
             ts = datetime.now()
-
         volume = int(data.get("volume", data.get("Volume", 0)) or 0)
         return Tick(timestamp=ts, security_id=sec_id, ltp=ltp, volume=volume)
     except Exception as e:
-        logger.debug(f"Tick parse error: {e} | data={data}")
+        logger.debug(f"Tick parse error: {e}")
         return None
 
 
 def _on_message(data: dict) -> None:
-    """Callback from DhanFeed websocket thread."""
     tick = _parse_tick(data)
     if tick:
         try:
             _tick_queue.put_nowait(tick)
         except queue.Full:
-            pass   # Drop oldest if queue is full (shouldn't happen under normal load)
+            pass
 
+
+# ── Feed startup ──────────────────────────────────────────────────────────────
 
 def _start_dhan_feed(instruments: list[tuple]) -> threading.Thread:
-    """
-    Start the Dhan websocket feed in a daemon thread.
-
-    instruments: list of (exchange_segment_int, security_id_str, subscription_type_int)
-    """
     def _run():
         try:
             from dhanhq import marketfeed
@@ -134,7 +123,7 @@ def _start_dhan_feed(instruments: list[tuple]) -> threading.Thread:
             logger.info(f"DhanFeed started with {len(instruments)} instruments")
             feed.run_forever()
         except ImportError:
-            logger.error("dhanhq library not installed. Run: pip install dhanhq")
+            logger.error("dhanhq not installed. Run: pip install -r requirements.txt")
             sys.exit(1)
         except Exception as e:
             logger.error(f"DhanFeed error: {e}", exc_info=True)
@@ -144,24 +133,16 @@ def _start_dhan_feed(instruments: list[tuple]) -> threading.Thread:
     return t
 
 
-# ── Historical bar backfill ────────────────────────────────────────────────────
+# ── Historical backfill ───────────────────────────────────────────────────────
 
-def _backfill_1m_bars(
-    dhan_client,
-    security_id: str,
-    exchange_segment: str,
-    bar_builder: MultiInstrumentBarBuilder,
-    n_bars: int = 160,
-) -> None:
-    """
-    Fetch recent 1-minute bars from Dhan's REST API and load them into
-    the bar builder, providing a warm start for the indicator engine.
-    """
+def _backfill_1m(dhan_client, security_id: str, exchange_segment: str,
+                 bar_builder: MultiInstrumentBarBuilder, n_bars: int = 160) -> None:
     try:
+        instr_type = "OPTIDX" if exchange_segment == "NSE_FNO" else "OPTSTK"
         resp = dhan_client.intraday_minute_data(
             security_id=security_id,
             exchange_segment=exchange_segment,
-            instrument_type="OPTIDX",
+            instrument_type=instr_type,
         )
         data = resp.get("data", {})
         opens  = data.get("open",  [])
@@ -182,158 +163,165 @@ def _backfill_1m_bars(
                 close=float(closes[i]),
                 volume=0,
             ))
-
         bar_builder.add_historical_bars(security_id, "1m", bars)
         logger.info(f"Backfilled {len(bars)} 1m bars for {security_id}")
     except Exception as e:
-        logger.warning(f"Backfill failed for {security_id}: {e}")
+        logger.debug(f"Backfill failed for {security_id}: {e}")
 
 
-# ── Main orchestrator ──────────────────────────────────────────────────────────
+# ── Main app ──────────────────────────────────────────────────────────────────
 
 class SpikeDetectorApp:
-    """Wires everything together and runs the main processing loop."""
+    """Wires all components together and runs the processing loop."""
 
     def __init__(self):
-        self._options_manager = OptionsManager()
+        self._stock_manager = StockOptionsManager()
         self._bar_builder = MultiInstrumentBarBuilder(on_bar_close=self._on_bar_close)
-        self._indicator_engines: dict[tuple[str, str], IndicatorEngine] = {}  # (sec_id, tf) -> engine
+        self._indicator_engines: dict[tuple[str, str], IndicatorEngine] = {}
         self._signal_engine = SignalEngine()
-        self._dashboard = Dashboard()
-        self._instrument_states: dict[str, InstrumentState] = {}   # sec_id -> state
+        self._instrument_states: dict[str, InstrumentState] = {}
+        self._signals: deque[Signal] = deque(maxlen=100)
         self._running = False
 
-        # For tracking Nifty spot (security_id = NIFTY_SECURITY_ID)
-        self._nifty_sec_id = NIFTY_SECURITY_ID
+        # Security ID maps
+        self._eq_sec_to_symbol: dict[str, str] = {}   # NSE_EQ sec_id -> stock symbol
+        self._stock_spots: dict[str, float] = {}       # stock symbol -> spot price
+        self._status_msg: str = "Starting…"
 
     # ── Startup ────────────────────────────────────────────────────────────────
 
     def start(self) -> None:
-        self._dashboard.set_status("Loading instruments master…")
-        logger.info("Starting Nifty Options Spike Detector")
+        print(f"""
+╔══════════════════════════════════════════════════════════════════╗
+║     OPTIONS SPIKE DETECTOR  —  Nifty 50 Stocks Edition          ║
+║  Strategy: Impulse spike → RSI retracement → breakout entry     ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Instruments : ATM CE + ATM PE for all {len(NIFTY50_STOCKS)} Nifty 50 stocks   ║
+║  Timeframes  : 5s / 15s / 1m                                    ║
+║  Dashboard   : http://{WEB_HOST if WEB_HOST != '0.0.0.0' else 'localhost'}:{WEB_PORT}                             ║
+╚══════════════════════════════════════════════════════════════════╝
+""")
 
-        # 1. Validate credentials
         if not DHAN_CLIENT_ID or not DHAN_ACCESS_TOKEN:
-            print("\n[ERROR] DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN must be set in .env\n")
-            print("  cp .env.example .env")
-            print("  # Edit .env and add your credentials\n")
+            print("[ERROR] Set DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN in .env\n")
             sys.exit(1)
+
+        # 1. Start web server first so the dashboard is immediately accessible
+        self._set_status("Starting web server…")
+        start_server(host=WEB_HOST, port=WEB_PORT)
+        time.sleep(0.5)   # give uvicorn a moment to bind
+        print(f"  Dashboard: http://localhost:{WEB_PORT}")
 
         # 2. Load instruments master
-        if not self._options_manager.initialise():
-            logger.warning("Could not load instruments master — will use placeholder security IDs")
+        self._set_status("Loading instruments master…")
+        if not self._stock_manager.initialise():
+            logger.warning("Instruments master load failed — will use placeholders")
 
-        # 3. Get initial Nifty spot (REST API)
+        # 3. Init Dhan REST client
+        self._set_status("Connecting to Dhan API…")
         try:
             from dhanhq import dhanhq
-            dhan = dhanhq(DHAN_CLIENT_ID, DHAN_ACCESS_TOKEN)
-            self._dhan_client = dhan
-            logger.info("Dhan REST client initialised")
+            self._dhan = dhanhq(DHAN_CLIENT_ID, DHAN_ACCESS_TOKEN)
         except ImportError:
-            print("\n[ERROR] dhanhq library not installed. Run: pip install -r requirements.txt\n")
+            print("[ERROR] dhanhq not installed. Run: pip install -r requirements.txt")
             sys.exit(1)
         except Exception as e:
-            logger.error(f"Dhan client init error: {e}")
-            print(f"\n[ERROR] Could not initialise Dhan client: {e}\n")
+            print(f"[ERROR] Dhan client init failed: {e}")
             sys.exit(1)
 
-        self._dashboard.set_status("Fetching Nifty spot price…")
+        # 4. Fetch spot prices for all 50 stocks
+        self._set_status("Fetching spot prices for Nifty 50 stocks…")
+        self._stock_spots = self._stock_manager.fetch_spot_prices(self._dhan)
+        if not self._stock_spots:
+            logger.warning("No spot prices fetched — using placeholder strikes")
+            # Provide some default prices so the rest can proceed
+            self._stock_spots = {sym: 1000.0 for sym in NIFTY50_STOCKS}
 
-        # 4. Get Nifty spot via quote API
-        nifty_spot = self._fetch_nifty_spot()
-        if nifty_spot <= 0:
-            print("\n[ERROR] Could not fetch Nifty spot price. Check credentials.\n")
-            sys.exit(1)
+        logger.info(f"Got spot prices for {len(self._stock_spots)} stocks")
 
-        logger.info(f"Nifty spot: {nifty_spot:.2f}")
-        self._dashboard.set_nifty_spot(nifty_spot)
+        # 5. Resolve options for all stocks
+        self._set_status("Resolving ATM options for all stocks…")
+        instruments, eq_ids = self._stock_manager.resolve_all(self._stock_spots)
 
-        # 5. Resolve ATM / ITM options
-        self._dashboard.set_status("Resolving ATM/ITM options…")
-        instruments = self._options_manager.resolve_instruments(nifty_spot)
         if not instruments:
-            print("\n[ERROR] Could not resolve option instruments.\n")
+            print("[ERROR] Could not resolve any option instruments.")
             sys.exit(1)
 
-        logger.info(f"Tracking {len(instruments)} options: " +
-                    ", ".join(f"{i.label}({i.security_id})" for i in instruments))
+        logger.info(f"Tracking {len(instruments)} option instruments")
 
         # 6. Register instruments
         for info in instruments:
             self._register_instrument(info)
-            # Backfill 1m bars
-            _backfill_1m_bars(self._dhan_client, info.security_id, "NSE_FNO",
-                               self._bar_builder)
 
-        # Update dashboard with initial states
-        self._dashboard.set_instrument_states(list(self._instrument_states.values()))
+        # 7. Build reverse map: NSE_EQ security_id -> symbol
+        for symbol, sec_id in eq_ids.items():
+            self._eq_sec_to_symbol[sec_id] = symbol
 
-        # 7. Build feed subscription list
-        feed_instruments = [
-            (IDX_I, self._nifty_sec_id, 15),      # Nifty spot — Ticker=15
-        ]
+        # 8. Backfill historical bars (optional — can slow startup)
+        if BACKFILL_STOCK_OPTIONS:
+            self._set_status("Backfilling historical bars…")
+            for info in instruments:
+                _backfill_1m(self._dhan, info.security_id, "NSE_FNO", self._bar_builder)
+
+        # 9. Build WebSocket subscription list
+        feed_instruments: list[tuple] = []
+        # Stock spot feeds (NSE_EQ)
+        for symbol, sec_id in eq_ids.items():
+            feed_instruments.append((NSE_EQ, sec_id, 15))
+        # Options feeds (NSE_FNO)
         for info in instruments:
-            feed_instruments.append((NSE_FNO, info.security_id, 15))
+            if not info.security_id.startswith(info.underlying or ""):
+                # Only subscribe real security IDs (skip placeholders)
+                feed_instruments.append((NSE_FNO, info.security_id, 15))
 
-        # 8. Start feed
-        self._dashboard.set_status("Connecting to Dhan feed…")
+        # 10. Start Dhan feed
+        self._set_status("Connecting to Dhan market feed…")
         _start_dhan_feed(feed_instruments)
-        logger.info("Feed thread started")
+        logger.info(f"Feed started — {len(feed_instruments)} subscriptions")
 
-        # 9. Start main processing loop in background
+        # 11. Start processor
         self._running = True
-        proc_thread = threading.Thread(target=self._process_loop, name="processor", daemon=True)
-        proc_thread.start()
+        proc = threading.Thread(target=self._process_loop, name="processor", daemon=True)
+        proc.start()
 
-        # 10. Run dashboard in main thread (blocks until 'q')
-        self._dashboard.set_status("Live — monitoring for spikes")
-        self._dashboard.run(refresh_interval=DASHBOARD_REFRESH_INTERVAL)
+        self._set_status("Live — monitoring for spikes")
+        print("  Press Ctrl+C to stop.\n")
 
-        self._running = False
-        logger.info("Shutdown complete")
+        # 12. Block main thread until interrupted
+        try:
+            while self._running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nShutting down…")
+            self._running = False
 
     # ── Instrument registration ────────────────────────────────────────────────
 
     def _register_instrument(self, info: OptionInfo) -> None:
         sid = info.security_id
         self._bar_builder.register(sid)
-
         state = InstrumentState(info=info)
         state.bars = {tf: [] for tf in TIMEFRAMES}
         state.indicators = {tf: None for tf in TIMEFRAMES}
         self._instrument_states[sid] = state
-
         for tf in TIMEFRAMES:
-            engine = IndicatorEngine()
-            self._indicator_engines[(sid, tf)] = engine
+            self._indicator_engines[(sid, tf)] = IndicatorEngine()
             self._signal_engine.register(info, tf)
 
-    # ── Bar close callback (from BarBuilder) ────────────────────────────────────
+    # ── Bar close callback ─────────────────────────────────────────────────────
 
     def _on_bar_close(self, security_id: str, timeframe: str, bar) -> None:
-        """
-        Called from the BarBuilder whenever a new OHLCV bar closes.
-        Updates the indicator engine and evaluates signals.
-        """
-        if security_id == self._nifty_sec_id:
-            return   # Nifty spot — we only need LTP, not indicators
-
         engine = self._indicator_engines.get((security_id, timeframe))
         state = self._instrument_states.get(security_id)
         if not engine or not state:
             return
 
-        # Push close price into indicator engine
         engine.push_close(bar.close)
-
-        # Compute all indicators
         indicators = engine.compute()
 
-        # Update state
         state.indicators[timeframe] = indicators
         state.bars[timeframe] = self._bar_builder.get_bars(security_id, timeframe)
 
-        # Evaluate for signals
         signal = self._signal_engine.evaluate(
             security_id=security_id,
             timeframe=timeframe,
@@ -342,54 +330,37 @@ class SpikeDetectorApp:
             bar_low=bar.low,
             bar_close=bar.close,
         )
-
         if signal:
-            # Update active signal on state
+            signal.underlying = state.info.underlying
             state.active_signals = [signal]
-            self._dashboard.push_signal(signal)
+            self._signals.appendleft(signal)
 
-        logger.debug(
-            f"Bar close {security_id} {timeframe} "
-            f"C={bar.close:.2f} RSI={indicators.rsi:.1f} "
-            f"MACD={indicators.macd_hist:+.3f}"
-        )
-
-    # ── Main processing loop ────────────────────────────────────────────────────
+    # ── Processing loop ────────────────────────────────────────────────────────
 
     def _process_loop(self) -> None:
-        """Drain the tick queue and dispatch ticks to the bar builder."""
         last_state_push = time.time()
 
         while self._running:
-            # Drain all pending ticks
             processed = 0
-            while processed < 200:   # cap per iteration to avoid starving dashboard
+            while processed < 300:
                 try:
                     tick = _tick_queue.get_nowait()
                 except queue.Empty:
                     break
 
-                if tick.security_id == self._nifty_sec_id:
-                    # Nifty spot update
-                    self._dashboard.set_nifty_spot(tick.ltp)
-                    atm_changed = self._options_manager.update_spot(tick.ltp)
-                    if atm_changed:
-                        logger.info(
-                            f"ATM changed to {self._options_manager.current_atm} "
-                            f"(Nifty={tick.ltp:.2f}) — consider re-resolving instruments"
-                        )
+                # NSE_EQ tick → update stock spot price
+                if tick.security_id in self._eq_sec_to_symbol:
+                    sym = self._eq_sec_to_symbol[tick.security_id]
+                    self._stock_spots[sym] = tick.ltp
                 else:
-                    # Option tick
+                    # Options tick
                     state = self._instrument_states.get(tick.security_id)
                     if state:
                         state.prev_ltp = state.ltp
                         state.ltp = tick.ltp
                         state.last_update = tick.timestamp
-
                     self._bar_builder.on_tick(tick)
 
-                    # Also push to indicator engine for sub-bar updates on current bar
-                    # (gives fresher RSI/MACD between bar closes)
                     for tf in TIMEFRAMES:
                         engine = self._indicator_engines.get((tick.security_id, tf))
                         if engine and engine.bar_count() > 0:
@@ -400,75 +371,101 @@ class SpikeDetectorApp:
 
                 processed += 1
 
-            # Push updated states to dashboard every 250 ms
+            # Push state to web dashboard every 500ms
             now = time.time()
-            if now - last_state_push > 0.25:
-                self._dashboard.set_instrument_states(
-                    list(self._instrument_states.values())
-                )
+            if now - last_state_push > 0.5:
+                update_state(self._build_web_state())
                 last_state_push = now
 
-            time.sleep(0.05)   # 50 ms sleep between tick batches
+            time.sleep(0.05)
 
-    # ── Nifty spot fetch ───────────────────────────────────────────────────────
+    # ── State serialisation for web dashboard ─────────────────────────────────
 
-    def _fetch_nifty_spot(self) -> float:
-        """
-        Attempt to get the Nifty 50 spot price via Dhan's quote API.
-        Falls back to 0.0 if unavailable.
-        """
-        try:
-            # Try market_feed quote endpoint (dhanhq v2)
-            resp = self._dhan_client.get_market_feed_quote(
-                securities={"IDX_I": [int(self._nifty_sec_id)]}
-            )
-            data = resp.get("data", {}).get("IDX_I", {})
-            for sec_id, quote in data.items():
-                ltp = float(quote.get("last_price", 0) or quote.get("LTP", 0))
-                if ltp > 0:
-                    return ltp
-        except AttributeError:
-            pass
-        except Exception as e:
-            logger.warning(f"get_market_feed_quote failed: {e}")
+    def _build_web_state(self) -> dict:
+        """Build a JSON-serialisable state snapshot for the web dashboard."""
+        stocks_data: dict[str, dict] = {}
 
-        try:
-            # Fallback: LTP endpoint
-            resp = self._dhan_client.get_last_traded_price(
-                securities={"IDX_I": [int(self._nifty_sec_id)]}
-            )
-            data = resp.get("data", {})
-            for key, val in data.items():
-                ltp = float(val.get("LTP", 0) or val.get("last_price", 0))
-                if ltp > 0:
-                    return ltp
-        except Exception as e:
-            logger.warning(f"get_last_traded_price failed: {e}")
+        for sid, state in self._instrument_states.items():
+            underlying = state.info.underlying or state.info.symbol
+            opt_type = state.info.option_type   # "CE" or "PE"
 
-        # As a last resort, return a sensible default so the app can still demo
-        logger.warning("Could not fetch Nifty spot — using 22000 as placeholder")
-        return 22000.0
+            if underlying not in stocks_data:
+                stocks_data[underlying] = {
+                    "spot": self._stock_spots.get(underlying, 0),
+                    "options": {},
+                }
+            else:
+                stocks_data[underlying]["spot"] = self._stock_spots.get(underlying,
+                    stocks_data[underlying]["spot"])
+
+            # Per-timeframe indicators
+            indicators_by_tf: dict[str, dict] = {}
+            for tf in TIMEFRAMES:
+                ind = state.indicators.get(tf)
+                if ind:
+                    indicators_by_tf[tf] = {
+                        "rsi":       round(ind.rsi, 1),
+                        "rsi_ema":   round(ind.rsi_ema, 1),
+                        "macd_hist": round(ind.macd_hist, 4),
+                        "bars":      len(state.bars.get(tf, [])),
+                    }
+
+            active_sig = state.active_signals[-1] if state.active_signals else None
+            stocks_data[underlying]["options"][opt_type] = {
+                "symbol":         state.info.symbol,
+                "strike":         state.info.strike,
+                "ltp":            state.ltp,
+                "ltp_change_pct": round(state.ltp_change_pct, 2),
+                "indicators":     indicators_by_tf,
+                # Flat (current 1m values) for backwards compat
+                "rsi":       round((state.indicators.get("1m") or _empty_ind()).rsi, 1),
+                "macd_hist": round((state.indicators.get("1m") or _empty_ind()).macd_hist, 4),
+                "bars":      len(state.bars.get("1m", [])),
+                "signal_status":    active_sig.status    if active_sig else None,
+                "signal_direction": active_sig.direction if active_sig else None,
+            }
+
+        signals_data = [
+            {
+                "timestamp":  s.timestamp.strftime("%H:%M:%S"),
+                "underlying": s.underlying or s.label,
+                "stock":      s.underlying or s.label,
+                "label":      s.label,
+                "direction":  s.direction,
+                "timeframe":  s.timeframe,
+                "status":     s.status,
+                "message":    s.message,
+                "spike_pct":  round(s.spike_pct, 1),
+            }
+            for s in list(self._signals)[:50]
+        ]
+
+        return {
+            "timestamp":  datetime.now().strftime("%H:%M:%S"),
+            "status":     self._status_msg,
+            "active_tf":  "1m",
+            "stocks":     stocks_data,
+            "signals":    signals_data,
+        }
+
+    def _set_status(self, msg: str) -> None:
+        self._status_msg = msg
+        update_state({"status": msg, "stocks": {}, "signals": [],
+                      "timestamp": datetime.now().strftime("%H:%M:%S"),
+                      "active_tf": "1m"})
+        logger.info(msg)
+
+
+def _empty_ind():
+    from src.models import Indicators
+    return Indicators()
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    print("""
-╔══════════════════════════════════════════════════════════════════╗
-║        NIFTY OPTIONS SPIKE DETECTOR  (v1.0)                     ║
-║  Strategy: Impulse spike → RSI retracement → breakout entry     ║
-╠══════════════════════════════════════════════════════════════════╣
-║  Timeframes : 5s / 15s / 1m                                     ║
-║  Instruments: ATM CE, ITM CE, ATM PE, ITM PE (Nifty weekly)     ║
-║  Indicators : RSI(14)+EMA(50), MACD(12,26,9), Lookback 10→150   ║
-╚══════════════════════════════════════════════════════════════════╝
-    """)
-
     app = SpikeDetectorApp()
-    try:
-        app.start()
-    except KeyboardInterrupt:
-        print("\nShutting down…")
+    app.start()
 
 
 if __name__ == "__main__":
