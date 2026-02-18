@@ -267,8 +267,7 @@ class StockOptionsManager:
     def fetch_spot_prices(self, dhan_client) -> dict[str, float]:
         """
         Fetch current spot prices for all Nifty 50 stocks via Dhan REST API.
-        Builds a mapping of {symbol: ltp}.
-        Falls back gracefully if individual stocks fail.
+        Tries dhanhq library methods first, then falls back to direct HTTP call.
         """
         spot_prices: dict[str, float] = {}
         symbols = list(NIFTY50_STOCKS.keys())
@@ -291,9 +290,7 @@ class StockOptionsManager:
         rev = {sid: sym for sym, sid in eq_ids.items()}
 
         _batch_methods = [
-            # dhanhq v2.1+
             ("get_market_feed_quote", lambda m: m(securities={"NSE_EQ": sec_ids})),
-            # dhanhq v2.0
             ("get_ltp",               lambda m: m({"NSE_EQ": sec_ids})),
             ("get_ltp_data",          lambda m: m({"NSE_EQ": sec_ids})),
             ("market_feed_quote",     lambda m: m({"NSE_EQ": sec_ids})),
@@ -306,10 +303,11 @@ class StockOptionsManager:
             try:
                 resp = caller(fn)
                 data = resp.get("data", {})
-                # response may be nested under exchange key or flat
                 rows = data.get("NSE_EQ", data)
                 if isinstance(rows, dict):
                     for sec_id_str, quote in rows.items():
+                        if not isinstance(quote, dict):
+                            continue
                         ltp = float(
                             quote.get("last_price", 0)
                             or quote.get("LTP", 0)
@@ -327,8 +325,74 @@ class StockOptionsManager:
             except Exception as e:
                 logger.debug(f"{method_name} failed: {e}")
 
+        # Fallback: direct HTTP call to Dhan LTP endpoint
         if not spot_prices:
-            logger.warning("All batch spot-price methods failed — no spot prices available")
+            logger.info("dhanhq methods unavailable — trying direct HTTP LTP endpoint")
+            spot_prices = self._fetch_stocks_via_http(dhan_client, eq_ids)
+
+        if not spot_prices:
+            logger.warning("All spot-price fetch methods failed")
+
+        return spot_prices
+
+    def _fetch_stocks_via_http(
+        self, dhan_client, eq_ids: dict[str, str]
+    ) -> dict[str, float]:
+        """Fetch stock spot prices via direct HTTP POST to Dhan's LTP endpoint."""
+        import requests as req
+
+        spot_prices: dict[str, float] = {}
+        access_token = str(getattr(dhan_client, "access_token", "") or "")
+        client_id    = str(getattr(dhan_client, "client_id",    "") or "")
+
+        if not access_token or not client_id:
+            logger.warning("Missing Dhan credentials for HTTP LTP call")
+            return spot_prices
+
+        rev     = {sid: sym for sym, sid in eq_ids.items()}
+        sec_ids = [int(sid) for sid in eq_ids.values() if sid.isdigit()]
+
+        try:
+            resp = req.post(
+                "https://api.dhan.co/v2/marketfeed/ltp",
+                json={"NSE_EQ": sec_ids},
+                headers={
+                    "Content-Type": "application/json",
+                    "access-token": access_token,
+                    "client-id":    client_id,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", {})
+            rows = data.get("NSE_EQ") or data   # handle nested or flat response
+
+            if isinstance(rows, dict):
+                for sec_id_str, quote in rows.items():
+                    if not isinstance(quote, dict):
+                        continue
+                    ltp = float(
+                        quote.get("last_price", 0)
+                        or quote.get("LTP", 0)
+                        or quote.get("ltp", 0)
+                    )
+                    sym = rev.get(sec_id_str)
+                    if not sym:
+                        try:
+                            sym = rev.get(str(int(float(sec_id_str))))
+                        except (ValueError, TypeError):
+                            pass
+                    if sym and ltp > 0:
+                        spot_prices[sym] = ltp
+
+            if spot_prices:
+                logger.info(
+                    f"HTTP LTP: fetched {len(spot_prices)}/{len(eq_ids)} spot prices"
+                )
+            else:
+                logger.warning(f"HTTP LTP returned no usable data: {resp.text[:200]}")
+        except Exception as e:
+            logger.warning(f"HTTP LTP fallback failed: {e}")
 
         return spot_prices
 
@@ -336,3 +400,57 @@ class StockOptionsManager:
     def eq_security_ids(self) -> dict[str, str]:
         with self._lock:
             return dict(self._eq_security_ids)
+
+
+# ── Nifty index spot price fetch ──────────────────────────────────────────────
+
+def fetch_nifty_spot(dhan_client) -> float:
+    """
+    Fetch the current Nifty 50 index spot price via Dhan's HTTP LTP endpoint.
+    Returns 0.0 if unavailable (off-hours, network error, etc.).
+    """
+    import requests as req
+
+    access_token = str(getattr(dhan_client, "access_token", "") or "")
+    client_id    = str(getattr(dhan_client, "client_id",    "") or "")
+
+    if not access_token or not client_id:
+        logger.warning("Cannot fetch Nifty spot: missing credentials")
+        return 0.0
+
+    headers = {
+        "Content-Type": "application/json",
+        "access-token": access_token,
+        "client-id":    client_id,
+    }
+
+    # Try different segment key names used by different Dhan API versions
+    for seg_key in ("IDX_I", "NSE_IDX", "NSE_INDEX"):
+        try:
+            resp = req.post(
+                "https://api.dhan.co/v2/marketfeed/ltp",
+                json={seg_key: [13]},
+                headers=headers,
+                timeout=10,
+            )
+            if not resp.ok:
+                continue
+            data = resp.json().get("data", {})
+            rows = data.get(seg_key) or data
+            if isinstance(rows, dict):
+                for _, quote in rows.items():
+                    if not isinstance(quote, dict):
+                        continue
+                    ltp = float(
+                        quote.get("last_price", 0)
+                        or quote.get("LTP", 0)
+                        or quote.get("ltp", 0)
+                    )
+                    if ltp > 0:
+                        logger.info(f"Nifty spot fetched via {seg_key}: {ltp}")
+                        return ltp
+        except Exception as e:
+            logger.debug(f"Nifty spot fetch via {seg_key}: {e}")
+
+    logger.warning("Could not fetch Nifty spot price; will use feed ticks instead")
+    return 0.0
