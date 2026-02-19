@@ -347,6 +347,26 @@ class SpikeDetectorApp:
                     _backfill_1m(self._dhan, info.security_id, "NSE_FNO",
                                  "OPTSTK", self._bar_builder)
 
+        # 9b. Seed indicator engines from backfilled bars.
+        #     add_historical_bars() only fills the BarBuilder deque — it doesn't
+        #     push closes into IndicatorEngine.  We do that here so RSI/MACD/
+        #     lookback values are available immediately (not only after the first
+        #     bar closes from a live tick).
+        seeded = 0
+        for sid, state in self._instrument_states.items():
+            for tf in TIMEFRAMES:
+                closes = self._bar_builder.get_closes(sid, tf, include_current=False)
+                if len(closes) >= 2:
+                    engine = self._indicator_engines.get((sid, tf))
+                    if engine:
+                        engine.load_closes(closes)
+                        ind = engine.compute()
+                        state.indicators[tf] = ind
+                        state.bars[tf] = self._bar_builder.get_bars(sid, tf)
+                        seeded += 1
+        if seeded:
+            logger.info(f"Seeded {seeded} indicator engines from backfilled history")
+
         # 10. Build WebSocket subscription list
         feed_instruments: list[tuple] = [
             # Nifty 50 index (spot)
@@ -457,11 +477,12 @@ class SpikeDetectorApp:
 
                     for tf in TIMEFRAMES:
                         engine = self._indicator_engines.get((tick.security_id, tf))
-                        if engine and engine.bar_count() > 0:
+                        if engine:
                             closes = self._bar_builder.get_closes(
                                 tick.security_id, tf, include_current=True
                             )
-                            engine.load_closes(closes)
+                            if closes:
+                                engine.load_closes(closes)
 
                 processed += 1
 
