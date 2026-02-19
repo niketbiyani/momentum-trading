@@ -179,6 +179,10 @@ class InstrumentsMaster:
     ) -> Optional[OptionInfo]:
         """
         Find the Dhan security ID for a specific Nifty option.
+        1. Filter by symbol prefix, instrument type (OPTIDX), option type, strike.
+        2. Parse expiry column once (auto-detect format) and filter to nearest
+           upcoming expiry — preferring exact match, falling back to the closest
+           available future expiry in the CSV.
         Returns None if not found.
         """
         if self._df is None:
@@ -187,63 +191,97 @@ class InstrumentsMaster:
         cm = self._col_map
         df = self._df
 
-        # Use startswith, not contains — "BANKNIFTY" and "FINNIFTY" both contain
-        # "NIFTY" as a substring, which would cause false matches at similar strikes.
+        # --- symbol prefix + option type --------------------------------
         mask = (
             df[cm["symbol"]].str.upper().str.startswith(underlying.upper())
             & (df[cm["option_type"]].str.upper() == option_type.upper())
         )
 
         # Filter to index options (OPTIDX) when the instrument column is available.
-        # This is a belt-and-suspenders guard against matching stock or ETF options.
         if "instrument" in cm:
             idx_mask = df[cm["instrument"]].str.upper().str.contains("OPTIDX", na=False)
             if idx_mask.any():
                 mask &= idx_mask
 
-        # Strike (may be stored as float or int)
+        # --- strike ------------------------------------------------------
         try:
             strike_col = df[cm["strike"]].astype(float)
             mask &= (strike_col == float(strike))
         except Exception:
             pass
 
-        # Expiry — Dhan may store as "DD-Mon-YYYY" or "YYYY-MM-DD"
-        expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
-        for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y"):
-            try:
-                parsed = pd.to_datetime(df[cm["expiry"]], format=fmt, errors="coerce")
-                expiry_mask = parsed.dt.date == expiry_dt.date()
-                if expiry_mask.any():
-                    mask &= expiry_mask
-                    break
-            except Exception:
-                continue
-
-        matches = df[mask]
-        if matches.empty:
+        candidates = df[mask].copy()
+        if candidates.empty:
             logger.warning(
-                f"No instrument found for {underlying} {strike}{option_type} expiry={expiry_date}"
+                f"No instrument found for {underlying} {strike}{option_type} "
+                f"(expiry={expiry_date}) — no rows match symbol/instrument/strike"
             )
             return None
 
-        row = matches.iloc[0]
+        # --- expiry: parse once, auto-detect format ----------------------
+        target_dt = datetime.strptime(expiry_date, "%Y-%m-%d").date()
+        today = datetime.now().date()
+
+        raw_expiry = candidates[cm["expiry"]]
+        parsed_expiry = pd.to_datetime(raw_expiry, dayfirst=True, errors="coerce")
+        # If auto-detect failed for some rows, try explicit formats
+        if parsed_expiry.isna().all():
+            for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y", "%b %d %Y"):
+                try:
+                    parsed_expiry = pd.to_datetime(raw_expiry, format=fmt, errors="coerce")
+                    if not parsed_expiry.isna().all():
+                        break
+                except Exception:
+                    continue
+
+        candidates = candidates.copy()
+        candidates["_expiry_dt"] = parsed_expiry.dt.date
+
+        # Drop rows where expiry couldn't be parsed or is in the past
+        candidates = candidates[
+            candidates["_expiry_dt"].notna()
+            & (candidates["_expiry_dt"] >= today)
+        ]
+
+        if candidates.empty:
+            logger.warning(
+                f"No current/future expiry found for {underlying} {strike}{option_type} "
+                f"(target={expiry_date})"
+            )
+            return None
+
+        # Prefer exact match; fall back to nearest upcoming expiry
+        exact = candidates[candidates["_expiry_dt"] == target_dt]
+        if not exact.empty:
+            row = exact.iloc[0]
+            matched_expiry = target_dt
+        else:
+            # Pick row with the closest future expiry date
+            candidates = candidates.sort_values("_expiry_dt")
+            row = candidates.iloc[0]
+            matched_expiry = row["_expiry_dt"]
+            logger.warning(
+                f"Exact expiry {expiry_date} not found for {underlying} {strike}{option_type} "
+                f"— using nearest available: {matched_expiry}"
+            )
+
         sec_id = str(row[cm["security_id"]])
-        # Dhan CSV sometimes stores security IDs as floats (e.g. "52456.0").
-        # Normalise to a plain integer string so it matches the integer the feed
-        # sends back in binary ticker packets.
         try:
             sec_id = str(int(float(sec_id)))
         except (ValueError, TypeError):
             pass
         symbol = str(row[cm["symbol"]])
 
+        logger.info(
+            f"Resolved {underlying} {strike}{option_type}: "
+            f"security_id={sec_id} symbol={symbol} expiry={matched_expiry}"
+        )
         return OptionInfo(
             security_id=sec_id,
             symbol=symbol,
             strike=strike,
             option_type=option_type,
-            expiry=expiry_date,
+            expiry=str(matched_expiry),
             label="",  # Set by caller
         )
 

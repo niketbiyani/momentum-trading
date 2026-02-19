@@ -127,7 +127,8 @@ class StockMasterMixin:
     ) -> Optional[OptionInfo]:
         """
         Find a stock option (OPTSTK) in the instruments master.
-        Similar to find_option() but targets OPTSTK instruments.
+        Prefers exact expiry match; falls back to nearest upcoming expiry if
+        the exact date is not in the CSV (e.g. on a holiday week).
         """
         if self._df is None:
             return None
@@ -147,34 +148,62 @@ class StockMasterMixin:
         except Exception:
             pass
 
-        # Expiry filter
-        expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
-        for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y"):
-            try:
-                parsed = pd.to_datetime(df[cm["expiry"]], format=fmt, errors="coerce")
-                expiry_mask = parsed.dt.date == expiry_dt.date()
-                if expiry_mask.any():
-                    mask &= expiry_mask
-                    break
-            except Exception:
-                continue
-
-        # Prefer FNO segment rows
-        seg_col = cm.get("segment", "")
-        if seg_col and seg_col in df.columns:
-            fno_mask = mask & df[seg_col].str.contains("FNO", na=False, case=False)
-            if fno_mask.any():
-                mask = fno_mask
-
-        matches = df[mask]
-        if matches.empty:
+        candidates = df[mask].copy()
+        if candidates.empty:
             logger.debug(
                 f"No stock option found for {underlying} {strike}{option_type} "
-                f"expiry={expiry_date}"
+                f"expiry={expiry_date} — no rows match symbol/strike"
             )
             return None
 
-        row = matches.iloc[0]
+        # --- parse expiry column once (auto-detect format) ---------------
+        target_dt = datetime.strptime(expiry_date, "%Y-%m-%d").date()
+        today = datetime.now().date()
+
+        raw_expiry = candidates[cm["expiry"]]
+        parsed_expiry = pd.to_datetime(raw_expiry, dayfirst=True, errors="coerce")
+        if parsed_expiry.isna().all():
+            for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y", "%b %d %Y"):
+                try:
+                    parsed_expiry = pd.to_datetime(raw_expiry, format=fmt, errors="coerce")
+                    if not parsed_expiry.isna().all():
+                        break
+                except Exception:
+                    continue
+
+        candidates = candidates.copy()
+        candidates["_expiry_dt"] = parsed_expiry.dt.date
+        candidates = candidates[
+            candidates["_expiry_dt"].notna()
+            & (candidates["_expiry_dt"] >= today)
+        ]
+
+        if candidates.empty:
+            logger.debug(
+                f"No current/future expiry for {underlying} {strike}{option_type} "
+                f"(target={expiry_date})"
+            )
+            return None
+
+        # Prefer FNO segment rows
+        seg_col = cm.get("segment", "")
+        if seg_col and seg_col in candidates.columns:
+            fno = candidates[candidates[seg_col].str.contains("FNO", na=False, case=False)]
+            if not fno.empty:
+                candidates = fno
+
+        # Prefer exact expiry; fall back to nearest upcoming
+        exact = candidates[candidates["_expiry_dt"] == target_dt]
+        if not exact.empty:
+            row = exact.iloc[0]
+        else:
+            candidates = candidates.sort_values("_expiry_dt")
+            row = candidates.iloc[0]
+            logger.debug(
+                f"Exact expiry {expiry_date} not found for {underlying} {strike}{option_type} "
+                f"— using nearest: {row['_expiry_dt']}"
+            )
+
         sec_id = str(row[cm["security_id"]])
         try:
             sec_id = str(int(float(sec_id)))   # "52456.0" → "52456"
@@ -185,7 +214,7 @@ class StockMasterMixin:
             symbol=str(row[cm["symbol"]]),
             strike=strike,
             option_type=option_type,
-            expiry=expiry_date,
+            expiry=str(row["_expiry_dt"]),
             label="",
             underlying=underlying,
         )
