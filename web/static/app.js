@@ -377,16 +377,16 @@ function renderLookbackHeatmap() {
   const rows = ORDER.map(({ key, label, cls }) => {
     const opt = opts[key];
     const ind = (opt && opt.indicators && opt.indicators[lbTf]) || {};
-    const ld  = ind.lb_delta || {};
+    const lp  = ind.lb_pct || {};
 
     const cells = LB_PERIODS.map(p => {
-      const v = ld[String(p)];
+      const v = lp[String(p)];
       if (v == null) return `<td class="hc-empty">—</td>`;
       const bg      = heatBg(v);
       const valCls  = v > 0 ? 'hc-pos' : v < 0 ? 'hc-neg' : 'hc-neu';
       const bgStyle = bg ? `background:${bg};` : '';
       const sign    = v > 0 ? '+' : '';
-      const tip     = `${p}b delta: ${sign}${v.toFixed(2)}%`;
+      const tip     = `vs ${p} bars ago: ${sign}${v.toFixed(2)}%`;
       return `<td class="${valCls}" style="${bgStyle}" title="${tip}">${sign}${v.toFixed(1)}%</td>`;
     }).join('');
 

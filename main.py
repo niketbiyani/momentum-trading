@@ -656,10 +656,10 @@ class SpikeDetectorApp:
                 ind = state.indicators.get(tf)
                 if ind:
                     sig = self._tf_signals.get((sid, tf))
-                    # Lookback delta for 10-100 bars (shows WHEN each spike occurred)
-                    lb_delta = {
+                    # Lookback pct: current price vs N bars ago (10,20,...,100)
+                    lb_pct = {
                         str(k): round(v, 2) if v is not None else None
-                        for k, v in ind.lookback_delta.items()
+                        for k, v in ind.lookback_pct.items()
                         if k <= 100
                     }
                     indicators_by_tf[tf] = {
@@ -671,8 +671,8 @@ class SpikeDetectorApp:
                         "signal_direction":sig.direction if sig else None,
                         # 10-bar lookback % — quick single-number spike indicator
                         "spk10":           round(ind.lookback_pct.get(10) or 0, 2),
-                        # Full lookback delta table (10,20,...,100 bars)
-                        "lb_delta":        lb_delta,
+                        # Full lookback pct table: current vs N bars ago
+                        "lb_pct":          lb_pct,
                     }
 
             active_sig = state.active_signals[-1] if state.active_signals else None

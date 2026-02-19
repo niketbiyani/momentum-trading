@@ -75,7 +75,7 @@
   <!-- Lookback delta heatmap -->
   <div id="lookback-section">
     <div class="section-hdr">
-      Lookback: % move per 10-bar window — large cell = spike in that window
+      Lookback: % move vs N bars ago — large cell = big move since then
       <span class="lb-tf-group">
         <button class="lb-tf-btn" data-lbtf="5s">5s</button>
         <button class="lb-tf-btn" data-lbtf="15s">15s</button>
@@ -84,23 +84,23 @@
       <span class="lb-legend">
         <span class="legend-ce">■ CE</span>
         <span class="legend-pe">■ PE</span>
-        &nbsp; e.g. "31-40" = price Δ% in bars 31–40 bars ago
+        &nbsp; e.g. "40b" = (current price − price 40 bars ago) / price 40 bars ago
       </span>
     </div>
     <table id="lookback-table">
       <thead>
         <tr>
           <th class="th-left">Option</th>
-          <th title="% move in last 10 bars (bars 1–10 ago)">1-10</th>
-          <th title="% move in bars 11–20 ago">11-20</th>
-          <th title="% move in bars 21–30 ago">21-30</th>
-          <th title="% move in bars 31–40 ago">31-40</th>
-          <th title="% move in bars 41–50 ago">41-50</th>
-          <th title="% move in bars 51–60 ago">51-60</th>
-          <th title="% move in bars 61–70 ago">61-70</th>
-          <th title="% move in bars 71–80 ago">71-80</th>
-          <th title="% move in bars 81–90 ago">81-90</th>
-          <th title="% move in bars 91–100 ago">91-100</th>
+          <th title="current vs 10 bars ago">10b</th>
+          <th title="current vs 20 bars ago">20b</th>
+          <th title="current vs 30 bars ago">30b</th>
+          <th title="current vs 40 bars ago">40b</th>
+          <th title="current vs 50 bars ago">50b</th>
+          <th title="current vs 60 bars ago">60b</th>
+          <th title="current vs 70 bars ago">70b</th>
+          <th title="current vs 80 bars ago">80b</th>
+          <th title="current vs 90 bars ago">90b</th>
+          <th title="current vs 100 bars ago">100b</th>
         </tr>
       </thead>
       <tbody id="lookback-body">
