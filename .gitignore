@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment / secrets
+.env
+
+# Distribution / build
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+
+# Cache files
+.instruments_cache.csv
