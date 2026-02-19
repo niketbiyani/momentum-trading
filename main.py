@@ -668,7 +668,7 @@ class SpikeDetectorApp:
                 "option_type":      state.info.option_type,
                 "label":            state.info.label,
                 "ltp":              state.ltp,
-                "ltp_change_pct":   round(state.ltp_change_pct, 2),
+                "ltp_change_pct":   round(state.ltp_change_pct or 0, 2),
                 "indicators":       indicators_by_tf,
                 # Flat 1m values for backwards compatibility
                 "rsi":       round((state.indicators.get("1m") or _empty_ind()).rsi, 1),

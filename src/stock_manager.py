@@ -376,10 +376,17 @@ class StockOptionsManager:
                 logger.info(f"ticker_data batch {i//100+1}: status={status} remarks={result.get('remarks')}")
 
                 if status == "success":
-                    # result['data'] = raw API JSON = {"data": {"NSE_EQ": {sid: {...}}}}
-                    nse_rows = result.get("data", {}).get("data", {}).get("NSE_EQ", {})
+                    # Dhan LTP API returns {"NSE_EQ": {sid: {...}}} directly in data.
+                    # Older library versions wrapped it as {"data": {"NSE_EQ": {...}}}.
+                    # Try flat path first, fall back to nested.
+                    data_body = result.get("data", {})
+                    nse_rows = (
+                        data_body.get("NSE_EQ")
+                        or data_body.get("data", {}).get("NSE_EQ")
+                        or {}
+                    )
                     if not nse_rows:
-                        logger.warning(f"ticker_data returned no NSE_EQ rows. Raw: {str(result.get('data',''))[:300]}")
+                        logger.warning(f"ticker_data returned no NSE_EQ rows. Raw: {str(data_body)[:300]}")
                     for sid_str, info in nse_rows.items():
                         sym = sid_to_sym.get(sid_str)
                         if not sym:
