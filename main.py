@@ -217,15 +217,15 @@ def _aggregate_bars(bars_1m: list, tf_seconds: int) -> list:
 def _backfill_1m(dhan_client, security_id: str, exchange_segment: str,
                  instrument_type: str,
                  bar_builder: MultiInstrumentBarBuilder,
-                 n_days: int = 2) -> None:
+                 n_days: int = 5) -> None:
     """
     Load n_days of 1-minute OHLC history for one instrument so that RSI,
     MACD and the full 150-bar lookback table are populated from startup.
 
-    n_days=2  →  fetches yesterday + today via a single API call (Dhan's
-    intraday_minute_data supports from_date / to_date).  The 1m bars are
-    stored in the bar_builder; 3m bars are derived by aggregation so the
-    3m indicator engine is also pre-seeded without a separate API call.
+    n_days=5  →  Dhan's intraday_minute_data supports up to 5 trading days.
+    The 1m bars are stored in the bar_builder; 3m bars are derived by
+    aggregation so the 3m indicator engine is also pre-seeded without a
+    separate API call.
     """
     try:
         from_date, to_date = _prior_trading_days(n_days)
@@ -237,12 +237,46 @@ def _backfill_1m(dhan_client, security_id: str, exchange_segment: str,
             from_date=from_date,
             to_date=to_date,
         )
-        data   = resp.get("data", {})
-        opens  = data.get("open",  [])
-        highs  = data.get("high",  [])
-        lows   = data.get("low",   [])
-        closes = data.get("close", [])
-        times  = data.get("start_Time", data.get("timestamp", []))
+
+        # ── 1. Check API-level status ─────────────────────────────────────
+        status = resp.get("status")
+        if status != "success":
+            logger.warning(
+                f"Backfill API failure for {security_id} "
+                f"({exchange_segment}/{instrument_type} {from_date}→{to_date}): "
+                f"status={status!r} remarks={resp.get('remarks')} "
+                f"raw={str(resp.get('data', ''))[:300]}"
+            )
+            return
+
+        # ── 2. Navigate response dict (handle flat vs nested shapes) ──────
+        raw = resp.get("data", {})
+
+        # Some Dhan endpoints wrap in an extra "data" key, e.g.
+        # {"data": {"open": [...], ...}} — unwrap if present and "open" missing
+        if isinstance(raw, dict) and not raw.get("open") and isinstance(raw.get("data"), dict):
+            raw = raw["data"]
+
+        if not isinstance(raw, dict):
+            logger.warning(
+                f"Unexpected response type for {security_id}: "
+                f"type={type(raw).__name__} raw={str(raw)[:300]}"
+            )
+            return
+
+        opens   = raw.get("open",  [])
+        highs   = raw.get("high",  [])
+        lows    = raw.get("low",   [])
+        closes  = raw.get("close", [])
+        volumes = raw.get("volume", [])
+        times   = raw.get("start_Time", raw.get("startTime", raw.get("timestamp", [])))
+
+        if not closes:
+            logger.warning(
+                f"No close data for {security_id} ({from_date}→{to_date}). "
+                f"Response keys: {list(raw.keys())}"
+            )
+            return
 
         bars: list[Bar] = []
         for i in range(len(closes)):
@@ -255,11 +289,11 @@ def _backfill_1m(dhan_client, security_id: str, exchange_segment: str,
             ts = datetime.fromtimestamp(float(times[i])) if times else datetime.now()
             bars.append(Bar(
                 timestamp=ts,
-                open=float(opens[i]),
-                high=float(highs[i]),
-                low=float(lows[i]),
+                open=float(opens[i]) if opens else c,
+                high=float(highs[i]) if highs else c,
+                low=float(lows[i]) if lows else c,
                 close=c,
-                volume=0,
+                volume=int(float(volumes[i])) if volumes else 0,
             ))
 
         if bars:
@@ -273,11 +307,11 @@ def _backfill_1m(dhan_client, security_id: str, exchange_segment: str,
             )
         else:
             logger.warning(
-                f"No bars returned for {security_id} "
-                f"({from_date} → {to_date}) — market closed?"
+                f"No valid bars for {security_id} ({from_date}→{to_date}): "
+                f"{len(closes)} closes received but all were 0/invalid"
             )
     except Exception as e:
-        logger.warning(f"Backfill failed for {security_id}: {e}")
+        logger.warning(f"Backfill failed for {security_id}: {e}", exc_info=True)
 
 
 # ── Main app ──────────────────────────────────────────────────────────────────
