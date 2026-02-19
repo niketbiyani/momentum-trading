@@ -187,11 +187,19 @@ class InstrumentsMaster:
         cm = self._col_map
         df = self._df
 
-        # Filter on symbol containing underlying name, option type, segment NFO
+        # Use startswith, not contains — "BANKNIFTY" and "FINNIFTY" both contain
+        # "NIFTY" as a substring, which would cause false matches at similar strikes.
         mask = (
-            df[cm["symbol"]].str.contains(underlying, na=False, case=False)
+            df[cm["symbol"]].str.upper().str.startswith(underlying.upper())
             & (df[cm["option_type"]].str.upper() == option_type.upper())
         )
+
+        # Filter to index options (OPTIDX) when the instrument column is available.
+        # This is a belt-and-suspenders guard against matching stock or ETF options.
+        if "instrument" in cm:
+            idx_mask = df[cm["instrument"]].str.upper().str.contains("OPTIDX", na=False)
+            if idx_mask.any():
+                mask &= idx_mask
 
         # Strike (may be stored as float or int)
         try:
@@ -221,6 +229,13 @@ class InstrumentsMaster:
 
         row = matches.iloc[0]
         sec_id = str(row[cm["security_id"]])
+        # Dhan CSV sometimes stores security IDs as floats (e.g. "52456.0").
+        # Normalise to a plain integer string so it matches the integer the feed
+        # sends back in binary ticker packets.
+        try:
+            sec_id = str(int(float(sec_id)))
+        except (ValueError, TypeError):
+            pass
         symbol = str(row[cm["symbol"]])
 
         return OptionInfo(

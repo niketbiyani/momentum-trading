@@ -309,6 +309,14 @@ class SpikeDetectorApp:
             f"Nifty instruments: {[i.label for i in nifty_instruments]} "
             f"(spot={self._nifty_spot}, ATM={self._nifty_manager.current_atm})"
         )
+        # Diagnostic: show exactly what security IDs were resolved.
+        # If any show "(unresolved)" the instruments master lookup failed for that strike.
+        # If isdigit=False the option will be silently skipped in the feed subscription.
+        for _info in nifty_instruments:
+            logger.info(
+                f"  {_info.label}: security_id={_info.security_id!r}  "
+                f"symbol={_info.symbol}  isdigit={_info.security_id.isdigit()}"
+            )
 
         # 6. Fetch spot prices for Nifty 50 stocks
         self._set_status("Fetching spot prices for Nifty 50 stocks…")
@@ -385,9 +393,18 @@ class SpikeDetectorApp:
                 feed_instruments.append((NSE_FNO, info.security_id, 15))
 
         # 11. Start Dhan feed
+        nifty_opt_subs = [i for i in nifty_instruments if i.security_id.isdigit()]
+        if len(nifty_opt_subs) < len(nifty_instruments):
+            logger.warning(
+                f"Only {len(nifty_opt_subs)}/{len(nifty_instruments)} Nifty options "
+                "have valid security IDs — the rest will NOT receive live ticks. "
+                "Check the instruments master log lines above for details."
+            )
         self._set_status("Connecting to Dhan market feed…")
         _start_dhan_feed(feed_instruments)
-        logger.info(f"Feed started — {len(feed_instruments)} subscriptions")
+        logger.info(f"Feed started — {len(feed_instruments)} subscriptions "
+                    f"({len(nifty_opt_subs)} Nifty options, "
+                    f"{len([i for i in stock_instruments if i.security_id.isdigit()])} stock options)")
 
         # 12. Start processor
         self._running = True
