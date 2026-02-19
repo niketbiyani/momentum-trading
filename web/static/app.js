@@ -8,7 +8,7 @@ let state = {
 };
 let activeTf  = '1m';
 let activeTab = 'nifty';   // 'nifty' | 'stocks'
-let lbTf      = '5s';      // timeframe used for lookback heatmap
+let lbTf      = '1m';      // timeframe used for lookback heatmap
 let searchQuery = '';
 let reconnectDelay = 1000;
 
