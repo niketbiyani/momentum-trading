@@ -169,45 +169,113 @@ def _start_dhan_feed(instruments: list[tuple]) -> threading.Thread:
 
 # ── Historical backfill ───────────────────────────────────────────────────────
 
+def _prior_trading_days(n: int) -> tuple[str, str]:
+    """
+    Return (from_date, to_date) spanning the last n trading days (Mon–Fri)
+    ending today, as "YYYY-MM-DD" strings.
+    E.g. n=2 on a Monday returns (last Friday, today).
+    """
+    from datetime import date, timedelta
+    today = date.today()
+    found = 0
+    ref = today - timedelta(days=1)
+    while found < n - 1:
+        if ref.weekday() < 5:   # Mon=0 … Fri=4
+            found += 1
+        if found < n - 1:
+            ref -= timedelta(days=1)
+    return ref.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+
+
+def _aggregate_bars(bars_1m: list, tf_seconds: int) -> list:
+    """
+    Aggregate a list of 1m Bar objects into larger timeframe bars.
+    Each output bar covers one tf_seconds bucket aligned to epoch boundaries
+    (same flooring used by BarBuilder._get_bar_start).
+    """
+    from collections import defaultdict
+    buckets: dict = defaultdict(list)
+    for bar in bars_1m:
+        epoch = int(bar.timestamp.timestamp())
+        bucket_start = (epoch // tf_seconds) * tf_seconds
+        buckets[bucket_start].append(bar)
+
+    result = []
+    for bucket_start in sorted(buckets.keys()):
+        group = buckets[bucket_start]
+        result.append(Bar(
+            timestamp=datetime.fromtimestamp(bucket_start),
+            open=group[0].open,
+            high=max(b.high for b in group),
+            low=min(b.low for b in group),
+            close=group[-1].close,
+            volume=sum(b.volume for b in group),
+        ))
+    return result
+
+
 def _backfill_1m(dhan_client, security_id: str, exchange_segment: str,
                  instrument_type: str,
-                 bar_builder: MultiInstrumentBarBuilder, n_bars: int = 160) -> None:
+                 bar_builder: MultiInstrumentBarBuilder,
+                 n_days: int = 2) -> None:
     """
-    Pre-load today's 1-minute OHLC bars for one option instrument so that
-    RSI / MACD have real history from the moment the app starts.
+    Load n_days of 1-minute OHLC history for one instrument so that RSI,
+    MACD and the full 150-bar lookback table are populated from startup.
 
-    instrument_type: "OPTIDX" for Nifty index options, "OPTSTK" for stock options.
+    n_days=2  →  fetches yesterday + today via a single API call (Dhan's
+    intraday_minute_data supports from_date / to_date).  The 1m bars are
+    stored in the bar_builder; 3m bars are derived by aggregation so the
+    3m indicator engine is also pre-seeded without a separate API call.
     """
     try:
+        from_date, to_date = _prior_trading_days(n_days)
+
         resp = dhan_client.intraday_minute_data(
             security_id=security_id,
             exchange_segment=exchange_segment,
             instrument_type=instrument_type,
+            from_date=from_date,
+            to_date=to_date,
         )
-        data = resp.get("data", {})
+        data   = resp.get("data", {})
         opens  = data.get("open",  [])
         highs  = data.get("high",  [])
         lows   = data.get("low",   [])
         closes = data.get("close", [])
         times  = data.get("start_Time", data.get("timestamp", []))
 
-        from src.models import Bar
-        bars = []
-        for i in range(min(len(closes), n_bars)):
-            ts = datetime.fromtimestamp(times[i]) if times else datetime.now()
+        bars: list[Bar] = []
+        for i in range(len(closes)):
+            try:
+                c = float(closes[i])
+            except (TypeError, ValueError):
+                continue
+            if c <= 0:
+                continue
+            ts = datetime.fromtimestamp(float(times[i])) if times else datetime.now()
             bars.append(Bar(
                 timestamp=ts,
                 open=float(opens[i]),
                 high=float(highs[i]),
                 low=float(lows[i]),
-                close=float(closes[i]),
+                close=c,
                 volume=0,
             ))
+
         if bars:
             bar_builder.add_historical_bars(security_id, "1m", bars)
-            logger.info(f"Backfilled {len(bars)} 1m bars for security_id={security_id}")
+            bars_3m = _aggregate_bars(bars, 180)
+            if bars_3m:
+                bar_builder.add_historical_bars(security_id, "3m", bars_3m)
+            logger.info(
+                f"Backfilled {len(bars)} 1m + {len(bars_3m)} 3m bars "
+                f"for {security_id} ({from_date} → {to_date})"
+            )
         else:
-            logger.debug(f"No intraday bars returned for security_id={security_id} (market closed?)")
+            logger.warning(
+                f"No bars returned for {security_id} "
+                f"({from_date} → {to_date}) — market closed?"
+            )
     except Exception as e:
         logger.warning(f"Backfill failed for {security_id}: {e}")
 

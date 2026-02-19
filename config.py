@@ -45,7 +45,8 @@ STOCK_TIMEFRAMES  = ["1m", "3m"]           # Nifty 50 stocks tab
 # ── Nifty / Options Settings ──────────────────────────────────────────────────
 NIFTY_SECURITY_ID = "13"         # Nifty 50 index security ID on Dhan
 NIFTY_STRIKE_STEP = int(os.getenv("NIFTY_STRIKE_STEP", "50"))
-MAX_BARS = 200                   # Rolling bar history to keep (> LOOKBACK_END)
+MAX_BARS = 400                   # Rolling bar history per timeframe (> LOOKBACK_END=150).
+                                # 400 × 1m = ~6.5 h; enough for 2 days of context after
 
 # ── Instruments Master ────────────────────────────────────────────────────────
 DHAN_INSTRUMENTS_CSV_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
