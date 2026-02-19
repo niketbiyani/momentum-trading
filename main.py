@@ -63,7 +63,7 @@ from config import (
     WEB_HOST,
     WEB_PORT,
 )
-from src.models import Tick, InstrumentState, OptionInfo, Signal
+from src.models import Bar, Tick, InstrumentState, OptionInfo, Signal
 from src.bar_builder import MultiInstrumentBarBuilder
 from src.indicators import IndicatorEngine
 from src.options_manager import OptionsManager

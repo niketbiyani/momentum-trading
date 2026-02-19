@@ -223,7 +223,7 @@ class InstrumentsMaster:
         today = datetime.now().date()
 
         raw_expiry = candidates[cm["expiry"]]
-        parsed_expiry = pd.to_datetime(raw_expiry, dayfirst=True, errors="coerce")
+        parsed_expiry = pd.to_datetime(raw_expiry, dayfirst=False, errors="coerce")
         # If auto-detect failed for some rows, try explicit formats
         if parsed_expiry.isna().all():
             for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d/%m/%Y", "%b %d %Y"):
