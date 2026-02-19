@@ -83,32 +83,34 @@ class StockMasterMixin:
         cm = self._col_map
         df = self._df
 
-        # Try exact symbol match in NSE_EQ / NSE segment
         sym_col = cm.get("symbol", "")
         seg_col = cm.get("segment", "")
 
         if not sym_col:
             return None
 
+        # Exact symbol match
         mask = df[sym_col].str.upper() == symbol.upper()
 
-        # SEM_SEGMENT for equity (cash) rows is "E" — NOT "NSE_EQ".
-        # "NSE_EQ" was the old ticker_data key; the CSV stores segment as "E".
+        # Segment filter: cash rows are "E" (compact CSV) or "EQ" in some versions
         if seg_col and seg_col in df.columns:
-            eq_mask = df[seg_col].str.upper() == "E"
-            if eq_mask.any():
+            eq_mask = df[seg_col].str.upper().isin(["E", "EQ"])
+            if (mask & eq_mask).any():
                 mask &= eq_mask
 
-        # Also restrict to NSE exchange to avoid picking BSE security IDs
+        # Exchange: prefer NSE over BSE
         exch_col = cm.get("exchange", "")
         if exch_col and exch_col in df.columns:
             nse_mask = df[exch_col].str.upper() == "NSE"
-            if nse_mask.any():
+            if (mask & nse_mask).any():
                 mask &= nse_mask
 
         matches = df[mask]
         if matches.empty:
-            logger.debug(f"No EQ security found for {symbol}")
+            logger.warning(
+                f"No EQ security ID found for {symbol} — "
+                f"check if the symbol name in config matches the Dhan instruments CSV"
+            )
             return None
 
         raw = str(matches.iloc[0][cm["security_id"]])
@@ -136,23 +138,16 @@ class StockMasterMixin:
         cm = self._col_map
         df = self._df
 
+        # --- symbol + option type filter (NO strike yet) -----------------
         mask = (
             df[cm["symbol"]].str.upper().str.startswith(underlying.upper(), na=False)
             & (df[cm["option_type"]].str.upper() == option_type.upper())
         )
 
-        # Strike filter
-        try:
-            strike_col = df[cm["strike"]].astype(float)
-            mask &= (strike_col == float(strike))
-        except Exception:
-            pass
-
         candidates = df[mask].copy()
         if candidates.empty:
             logger.debug(
-                f"No stock option found for {underlying} {strike}{option_type} "
-                f"expiry={expiry_date} — no rows match symbol/strike"
+                f"No rows for {underlying} {option_type} in instruments master"
             )
             return None
 
@@ -180,7 +175,7 @@ class StockMasterMixin:
 
         if candidates.empty:
             logger.debug(
-                f"No current/future expiry for {underlying} {strike}{option_type} "
+                f"No current/future expiry rows for {underlying} {option_type} "
                 f"(target={expiry_date})"
             )
             return None
@@ -193,16 +188,28 @@ class StockMasterMixin:
                 candidates = fno
 
         # Prefer exact expiry; fall back to nearest upcoming
-        exact = candidates[candidates["_expiry_dt"] == target_dt]
-        if not exact.empty:
-            row = exact.iloc[0]
+        exact_exp = candidates[candidates["_expiry_dt"] == target_dt]
+        if not exact_exp.empty:
+            candidates = exact_exp
         else:
-            candidates = candidates.sort_values("_expiry_dt")
+            nearest_exp = candidates["_expiry_dt"].min()
+            candidates = candidates[candidates["_expiry_dt"] == nearest_exp]
+
+        # --- nearest strike to ATM ----------------------------------------
+        try:
+            candidates = candidates.copy()
+            candidates["_strike_f"] = candidates[cm["strike"]].astype(float)
+            candidates["_strike_dist"] = (candidates["_strike_f"] - float(strike)).abs()
+            candidates = candidates.sort_values("_strike_dist")
             row = candidates.iloc[0]
-            logger.debug(
-                f"Exact expiry {expiry_date} not found for {underlying} {strike}{option_type} "
-                f"— using nearest: {row['_expiry_dt']}"
-            )
+            actual_strike = row["_strike_f"]
+            if actual_strike != float(strike):
+                logger.debug(
+                    f"{underlying} {option_type}: ATM {strike} not in CSV, "
+                    f"using nearest strike {int(actual_strike)} (expiry {row['_expiry_dt']})"
+                )
+        except Exception:
+            row = candidates.iloc[0]
 
         sec_id = str(row[cm["security_id"]])
         try:
@@ -347,7 +354,7 @@ class StockOptionsManager:
             if sid:
                 eq_ids[sym] = sid
             else:
-                logger.debug(f"No EQ security ID for {sym}")
+                logger.warning(f"No EQ security ID for {sym} — will have no spot price")
 
         if not eq_ids:
             logger.warning(
