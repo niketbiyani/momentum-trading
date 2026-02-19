@@ -118,14 +118,19 @@ class StockMasterMixin:
             mask3 = df["SEM_CUSTOM_SYMBOL"].str.upper() == symbol.upper()
             matches = df[_apply_filters(mask3)]
 
+        # Pass 4: try with "-EQ" suffix (some Dhan CSV entries use "SYMBOL-EQ")
         if matches.empty:
-            # Debug: show what the CSV actually has for this symbol prefix
+            mask4 = df[sym_col].str.upper() == (symbol.upper() + "-EQ")
+            matches = df[_apply_filters(mask4)]
+
+        if matches.empty:
+            # Log what the CSV actually has near this symbol so the mismatch is visible
             for col in [sym_col, "SM_SYMBOL_NAME", "SEM_CUSTOM_SYMBOL"]:
                 if col in df.columns:
                     hits = df[df[col].str.upper().str.startswith(symbol[:6].upper(), na=False)]
                     if not hits.empty:
-                        sample = hits[[col, seg_col, cm.get("exchange","")]].head(3).to_dict("records")
-                        logger.debug(f"CSV rows containing '{symbol[:6]}' in {col}: {sample}")
+                        sample = hits[[col, seg_col, cm.get("exchange","")]].head(5).to_dict("records")
+                        logger.warning(f"CSV rows starting with '{symbol[:6]}' in {col}: {sample}")
                         break
             logger.warning(
                 f"No EQ security ID found for {symbol} — "
@@ -433,30 +438,65 @@ class StockOptionsManager:
 
 def fetch_nifty_spot(dhan_client) -> float:
     """
-    Fetch the current Nifty 50 index spot price via dhan.ticker_data().
-    Uses the library's own session + credentials — no manual header building.
-    Returns 0.0 on failure (feed ticks will supply the real price instead).
+    Fetch the current Nifty 50 index spot price.
+
+    Strategy (in order):
+      1. ticker_data() with IDX_I segment
+      2. intraday_minute_data() last close — known to work (used by backfill)
+         Tries today, yesterday, day-before so it works outside market hours too.
+
+    Returns 0.0 only if every method fails.
     """
     from config import NIFTY_SECURITY_ID
+    from datetime import date, timedelta
+
+    # ── Try 1: ticker_data ────────────────────────────────────────────────────
     try:
         result = dhan_client.ticker_data({"IDX_I": [int(NIFTY_SECURITY_ID)]})
         status = result.get("status")
-        logger.info(f"Nifty spot ticker_data: status={status} remarks={result.get('remarks')}")
-
+        logger.info(f"Nifty spot ticker_data: status={status}")
         if status == "success":
-            # result['data'] = raw API JSON = {"data": {"IDX_I": {sid: {"last_price": ...}}}}
-            idx_rows = result.get("data", {}).get("data", {}).get("IDX_I", {})
-            if not idx_rows:
-                logger.warning(f"No IDX_I data in response: {str(result.get('data',''))[:300]}")
+            data_body = result.get("data", {})
+            # Handle both flat {"IDX_I": ...} and nested {"data": {"IDX_I": ...}}
+            idx_rows = (
+                data_body.get("IDX_I")
+                or data_body.get("data", {}).get("IDX_I")
+                or {}
+            )
             for sid_str, info in idx_rows.items():
                 price = float(info.get("last_price", 0) or 0)
                 if price > 0:
-                    logger.info(f"Nifty 50 spot: ₹{price:,.2f}")
+                    logger.info(f"Nifty spot from ticker_data: ₹{price:,.2f}")
                     return price
         else:
             logger.warning(f"Nifty spot ticker_data failure: {result.get('remarks')}")
     except Exception as e:
-        logger.error(f"fetch_nifty_spot error: {e}", exc_info=True)
+        logger.warning(f"fetch_nifty_spot ticker_data error: {e}")
+
+    # ── Try 2: intraday_minute_data last close ────────────────────────────────
+    # Works during market hours AND gives yesterday's close outside hours —
+    # either way far better than a hardcoded 23000 placeholder.
+    today = date.today()
+    for back in range(4):
+        d = today - timedelta(days=back)
+        try:
+            result = dhan_client.intraday_minute_data(
+                security_id=NIFTY_SECURITY_ID,
+                exchange_segment="IDX_I",
+                instrument_type="INDEX",
+                from_date=str(d),
+                to_date=str(d),
+            )
+            if result.get("status") == "success":
+                closes = result.get("data", {}).get("close", [])
+                if closes:
+                    price = float(closes[-1])
+                    logger.info(
+                        f"Nifty spot from intraday_minute_data ({d}): ₹{price:,.2f}"
+                    )
+                    return price
+        except Exception as e:
+            logger.debug(f"intraday fallback error for {d}: {e}")
 
     logger.warning("Nifty spot unavailable via REST — will update from WebSocket feed ticks")
     return 0.0
