@@ -134,33 +134,48 @@ def _start_dhan_feed(instruments: list[tuple]) -> threading.Thread:
         asyncio.set_event_loop(loop)
         try:
             from dhanhq import marketfeed
-            # DhanFeed.__init__ takes (client_id, access_token, instruments, version).
-            # There is NO on_message kwarg — data is pulled via get_data() in a loop.
-            feed = marketfeed.DhanFeed(
-                DHAN_CLIENT_ID,
-                DHAN_ACCESS_TOKEN,
-                instruments,
-                version='v2',
-            )
-            # run_forever() connects the WebSocket and subscribes to instruments,
-            # then returns.  We poll for data ourselves with get_data().
-            feed.run_forever()
-            logger.info(
-                f"DhanFeed connected — {len(instruments)} instruments subscribed. "
-                "Starting data poll loop…"
-            )
-            while True:
-                try:
-                    data = feed.get_data()
-                    _on_message(data)
-                except Exception as tick_err:
-                    logger.warning(f"DhanFeed get_data error: {tick_err}")
-                    time.sleep(0.1)
         except ImportError:
             logger.error("dhanhq not installed. Run: pip install -r requirements.txt")
             sys.exit(1)
-        except Exception as e:
-            logger.error(f"DhanFeed error: {e}", exc_info=True)
+
+        backoff = 5  # seconds between reconnect attempts
+        while True:
+            try:
+                feed = marketfeed.DhanFeed(
+                    DHAN_CLIENT_ID,
+                    DHAN_ACCESS_TOKEN,
+                    instruments,
+                    version='v2',
+                )
+                feed.run_forever()
+                logger.info(
+                    f"DhanFeed connected — {len(instruments)} instruments subscribed. "
+                    "Starting data poll loop…"
+                )
+                backoff = 5  # reset on successful connect
+                consecutive_errors = 0
+                while True:
+                    try:
+                        data = feed.get_data()
+                        _on_message(data)
+                        consecutive_errors = 0
+                    except Exception as tick_err:
+                        consecutive_errors += 1
+                        if consecutive_errors == 1:
+                            logger.warning(f"DhanFeed get_data error: {tick_err}")
+                        if consecutive_errors >= 10:
+                            # Connection is dead — break inner loop to reconnect
+                            logger.warning(
+                                f"DhanFeed lost after {consecutive_errors} consecutive "
+                                f"errors ({tick_err}) — reconnecting in {backoff}s…"
+                            )
+                            break
+                        time.sleep(0.1)
+            except Exception as e:
+                logger.error(f"DhanFeed connect error: {e}")
+
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 120)  # cap at 2 minutes
 
     t = threading.Thread(target=_run, name="dhan-feed", daemon=True)
     t.start()

@@ -89,24 +89,44 @@ class StockMasterMixin:
         if not sym_col:
             return None
 
-        # Exact symbol match
+        def _apply_filters(mask):
+            """Apply segment and exchange filters, preferring NSE equity rows."""
+            # Segment filter: cash rows are "E" (compact CSV) or "EQ" in some versions
+            if seg_col and seg_col in df.columns:
+                eq_mask = df[seg_col].str.upper().isin(["E", "EQ"])
+                if (mask & eq_mask).any():
+                    mask = mask & eq_mask
+            # Exchange: prefer NSE over BSE
+            exch_col = cm.get("exchange", "")
+            if exch_col and exch_col in df.columns:
+                nse_mask = df[exch_col].str.upper() == "NSE"
+                if (mask & nse_mask).any():
+                    mask = mask & nse_mask
+            return mask
+
+        # Pass 1: exact match on SEM_TRADING_SYMBOL
         mask = df[sym_col].str.upper() == symbol.upper()
+        matches = df[_apply_filters(mask)]
 
-        # Segment filter: cash rows are "E" (compact CSV) or "EQ" in some versions
-        if seg_col and seg_col in df.columns:
-            eq_mask = df[seg_col].str.upper().isin(["E", "EQ"])
-            if (mask & eq_mask).any():
-                mask &= eq_mask
+        # Pass 2: try SM_SYMBOL_NAME column (Dhan sometimes differs from trading symbol)
+        if matches.empty and "SM_SYMBOL_NAME" in df.columns:
+            mask2 = df["SM_SYMBOL_NAME"].str.upper() == symbol.upper()
+            matches = df[_apply_filters(mask2)]
 
-        # Exchange: prefer NSE over BSE
-        exch_col = cm.get("exchange", "")
-        if exch_col and exch_col in df.columns:
-            nse_mask = df[exch_col].str.upper() == "NSE"
-            if (mask & nse_mask).any():
-                mask &= nse_mask
+        # Pass 3: try SEM_CUSTOM_SYMBOL (another candidate column in Dhan CSV)
+        if matches.empty and "SEM_CUSTOM_SYMBOL" in df.columns:
+            mask3 = df["SEM_CUSTOM_SYMBOL"].str.upper() == symbol.upper()
+            matches = df[_apply_filters(mask3)]
 
-        matches = df[mask]
         if matches.empty:
+            # Debug: show what the CSV actually has for this symbol prefix
+            for col in [sym_col, "SM_SYMBOL_NAME", "SEM_CUSTOM_SYMBOL"]:
+                if col in df.columns:
+                    hits = df[df[col].str.upper().str.startswith(symbol[:6].upper(), na=False)]
+                    if not hits.empty:
+                        sample = hits[[col, seg_col, cm.get("exchange","")]].head(3).to_dict("records")
+                        logger.debug(f"CSV rows containing '{symbol[:6]}' in {col}: {sample}")
+                        break
             logger.warning(
                 f"No EQ security ID found for {symbol} — "
                 f"check if the symbol name in config matches the Dhan instruments CSV"
