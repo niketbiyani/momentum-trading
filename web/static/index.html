@@ -75,7 +75,7 @@
   <!-- Lookback delta heatmap -->
   <div id="lookback-section">
     <div class="section-hdr">
-      Lookback Δ% per 10-bar window
+      Lookback: % move per 10-bar window — large cell = spike in that window
       <span class="lb-tf-group">
         <button class="lb-tf-btn" data-lbtf="5s">5s</button>
         <button class="lb-tf-btn" data-lbtf="15s">15s</button>
@@ -84,23 +84,23 @@
       <span class="lb-legend">
         <span class="legend-ce">■ CE</span>
         <span class="legend-pe">■ PE</span>
-        &nbsp; large cell = spike in that window
+        &nbsp; e.g. "31-40" = price Δ% in bars 31–40 bars ago
       </span>
     </div>
     <table id="lookback-table">
       <thead>
         <tr>
           <th class="th-left">Option</th>
-          <th title="Δ in last 10 bars">10b</th>
-          <th title="Δ in bars 11–20">20b</th>
-          <th title="Δ in bars 21–30">30b</th>
-          <th title="Δ in bars 31–40">40b</th>
-          <th title="Δ in bars 41–50">50b</th>
-          <th title="Δ in bars 51–60">60b</th>
-          <th title="Δ in bars 61–70">70b</th>
-          <th title="Δ in bars 71–80">80b</th>
-          <th title="Δ in bars 81–90">90b</th>
-          <th title="Δ in bars 91–100">100b</th>
+          <th title="% move in last 10 bars (bars 1–10 ago)">1-10</th>
+          <th title="% move in bars 11–20 ago">11-20</th>
+          <th title="% move in bars 21–30 ago">21-30</th>
+          <th title="% move in bars 31–40 ago">31-40</th>
+          <th title="% move in bars 41–50 ago">41-50</th>
+          <th title="% move in bars 51–60 ago">51-60</th>
+          <th title="% move in bars 61–70 ago">61-70</th>
+          <th title="% move in bars 71–80 ago">71-80</th>
+          <th title="% move in bars 81–90 ago">81-90</th>
+          <th title="% move in bars 91–100 ago">91-100</th>
         </tr>
       </thead>
       <tbody id="lookback-body">
