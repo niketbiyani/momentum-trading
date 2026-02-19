@@ -126,6 +126,12 @@ def _on_message(data) -> None:
 
 def _start_dhan_feed(instruments: list[tuple]) -> threading.Thread:
     def _run():
+        import asyncio
+        # Python 3.10+ doesn't auto-create an event loop in background threads.
+        # DhanFeed.__init__ calls asyncio.get_event_loop(), so we must create
+        # one explicitly before constructing the feed.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
             from dhanhq import marketfeed
             # DhanFeed.__init__ takes (client_id, access_token, instruments, version).
