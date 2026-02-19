@@ -111,7 +111,12 @@ class StockMasterMixin:
             logger.debug(f"No EQ security found for {symbol}")
             return None
 
-        return str(matches.iloc[0][cm["security_id"]])
+        raw = str(matches.iloc[0][cm["security_id"]])
+        try:
+            raw = str(int(float(raw)))   # "52456.0" → "52456"
+        except (ValueError, TypeError):
+            pass
+        return raw
 
     def find_stock_option(
         self,
@@ -170,8 +175,13 @@ class StockMasterMixin:
             return None
 
         row = matches.iloc[0]
+        sec_id = str(row[cm["security_id"]])
+        try:
+            sec_id = str(int(float(sec_id)))   # "52456.0" → "52456"
+        except (ValueError, TypeError):
+            pass
         return OptionInfo(
-            security_id=str(row[cm["security_id"]]),
+            security_id=sec_id,
             symbol=str(row[cm["symbol"]]),
             strike=strike,
             option_type=option_type,

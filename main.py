@@ -209,7 +209,7 @@ def _backfill_1m(dhan_client, security_id: str, exchange_segment: str,
         else:
             logger.debug(f"No intraday bars returned for security_id={security_id} (market closed?)")
     except Exception as e:
-        logger.debug(f"Backfill failed for {security_id}: {e}")
+        logger.warning(f"Backfill failed for {security_id}: {e}")
 
 
 # ── Main app ──────────────────────────────────────────────────────────────────
@@ -495,8 +495,11 @@ class SpikeDetectorApp:
                     for tf in TIMEFRAMES:
                         engine = self._indicator_engines.get((tick.security_id, tf))
                         if engine:
+                            # include_current=False: only completed bars go into the
+                            # engine so that _on_bar_close's push_close() adds exactly
+                            # one new close without duplicating the current bar.
                             closes = self._bar_builder.get_closes(
-                                tick.security_id, tf, include_current=True
+                                tick.security_id, tf, include_current=False
                             )
                             if closes:
                                 engine.load_closes(closes)

@@ -51,6 +51,14 @@ class BarBuilder:
             for tf, tf_seconds in TIMEFRAMES.items():
                 bar_start = self._get_bar_start(tick.timestamp, tf_seconds)
                 completed[tf] = self._update_timeframe(tf, bar_start, tick)
+
+        # Fire callbacks AFTER releasing the lock.
+        # on_bar_close calls back into bar_builder.get_bars() which also needs
+        # self._lock — calling it inside would deadlock (Lock is not reentrant).
+        for tf, bar in completed.items():
+            if bar and self.on_bar_close:
+                self.on_bar_close(self.security_id, tf, bar)
+
         return completed
 
     def add_historical_bar(self, timeframe: str, bar: Bar) -> None:
@@ -120,9 +128,7 @@ class BarBuilder:
             # New bar started — close the current one
             completed_bar = self._current_bar[tf]
             self._bars[tf].append(completed_bar)
-
-            if self.on_bar_close:
-                self.on_bar_close(self.security_id, tf, completed_bar)
+            # (callback fired by add_tick after the lock is released)
 
             # Open the new bar
             self._current_bar_start[tf] = bar_start
