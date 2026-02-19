@@ -286,7 +286,12 @@ def _backfill_1m(dhan_client, security_id: str, exchange_segment: str,
                 continue
             if c <= 0:
                 continue
-            ts = datetime.fromtimestamp(float(times[i])) if times else datetime.now()
+            if times:
+                ts_val = float(times[i])
+                # REST API returns seconds; guard against milliseconds (> year 2286)
+                ts = datetime.fromtimestamp(ts_val / 1000 if ts_val > 1e10 else ts_val)
+            else:
+                ts = datetime.now()
             bars.append(Bar(
                 timestamp=ts,
                 open=float(opens[i]) if opens else c,
