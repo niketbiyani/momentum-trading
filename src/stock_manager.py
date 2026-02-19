@@ -92,11 +92,19 @@ class StockMasterMixin:
 
         mask = df[sym_col].str.upper() == symbol.upper()
 
-        # Filter to equity segment if column is available
+        # SEM_SEGMENT for equity (cash) rows is "E" — NOT "NSE_EQ".
+        # "NSE_EQ" was the old ticker_data key; the CSV stores segment as "E".
         if seg_col and seg_col in df.columns:
-            eq_mask = df[seg_col].str.contains("NSE_EQ", na=False, case=False)
+            eq_mask = df[seg_col].str.upper() == "E"
             if eq_mask.any():
                 mask &= eq_mask
+
+        # Also restrict to NSE exchange to avoid picking BSE security IDs
+        exch_col = cm.get("exchange", "")
+        if exch_col and exch_col in df.columns:
+            nse_mask = df[exch_col].str.upper() == "NSE"
+            if nse_mask.any():
+                mask &= nse_mask
 
         matches = df[mask]
         if matches.empty:

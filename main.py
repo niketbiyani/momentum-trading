@@ -84,18 +84,25 @@ _tick_queue: queue.Queue = queue.Queue(maxsize=10_000)
 
 def _parse_tick(data: dict) -> Optional[Tick]:
     try:
+        # DhanFeed returns LTP as a formatted string e.g. "23450.50"
         ltp = float(data.get("LTP", 0) or data.get("ltp", 0))
         if ltp <= 0:
             return None
         sec_id = str(data.get("security_id", data.get("Security Id", "")))
         if not sec_id:
             return None
+        # LTT from DhanFeed.process_ticker() is already "HH:MM:SS" (not epoch).
+        # Try epoch float first; fall back to datetime.now() for string formats.
         raw_ltt = data.get("LTT", data.get("ltt", 0)) or 0
-        if raw_ltt > 1e12:
-            ts = datetime.fromtimestamp(raw_ltt / 1000)
-        elif raw_ltt > 0:
-            ts = datetime.fromtimestamp(raw_ltt)
-        else:
+        try:
+            ltt_num = float(raw_ltt)
+            if ltt_num > 1e12:
+                ts = datetime.fromtimestamp(ltt_num / 1000)
+            elif ltt_num > 0:
+                ts = datetime.fromtimestamp(ltt_num)
+            else:
+                ts = datetime.now()
+        except (ValueError, TypeError):
             ts = datetime.now()
         volume = int(data.get("volume", data.get("Volume", 0)) or 0)
         return Tick(timestamp=ts, security_id=sec_id, ltp=ltp, volume=volume)
@@ -104,7 +111,9 @@ def _parse_tick(data: dict) -> Optional[Tick]:
         return None
 
 
-def _on_message(data: dict) -> None:
+def _on_message(data) -> None:
+    if not data or not isinstance(data, dict):
+        return
     tick = _parse_tick(data)
     if tick:
         try:
@@ -119,14 +128,28 @@ def _start_dhan_feed(instruments: list[tuple]) -> threading.Thread:
     def _run():
         try:
             from dhanhq import marketfeed
+            # DhanFeed.__init__ takes (client_id, access_token, instruments, version).
+            # There is NO on_message kwarg — data is pulled via get_data() in a loop.
             feed = marketfeed.DhanFeed(
-                client_id=DHAN_CLIENT_ID,
-                access_token=DHAN_ACCESS_TOKEN,
-                instruments=instruments,
-                on_message=_on_message,
+                DHAN_CLIENT_ID,
+                DHAN_ACCESS_TOKEN,
+                instruments,
+                version='v2',
             )
-            logger.info(f"DhanFeed started with {len(instruments)} instruments")
+            # run_forever() connects the WebSocket and subscribes to instruments,
+            # then returns.  We poll for data ourselves with get_data().
             feed.run_forever()
+            logger.info(
+                f"DhanFeed connected — {len(instruments)} instruments subscribed. "
+                "Starting data poll loop…"
+            )
+            while True:
+                try:
+                    data = feed.get_data()
+                    _on_message(data)
+                except Exception as tick_err:
+                    logger.warning(f"DhanFeed get_data error: {tick_err}")
+                    time.sleep(0.1)
         except ImportError:
             logger.error("dhanhq not installed. Run: pip install -r requirements.txt")
             sys.exit(1)
@@ -141,13 +164,19 @@ def _start_dhan_feed(instruments: list[tuple]) -> threading.Thread:
 # ── Historical backfill ───────────────────────────────────────────────────────
 
 def _backfill_1m(dhan_client, security_id: str, exchange_segment: str,
+                 instrument_type: str,
                  bar_builder: MultiInstrumentBarBuilder, n_bars: int = 160) -> None:
+    """
+    Pre-load today's 1-minute OHLC bars for one option instrument so that
+    RSI / MACD have real history from the moment the app starts.
+
+    instrument_type: "OPTIDX" for Nifty index options, "OPTSTK" for stock options.
+    """
     try:
-        instr_type = "OPTIDX" if exchange_segment == "NSE_FNO" else "OPTSTK"
         resp = dhan_client.intraday_minute_data(
             security_id=security_id,
             exchange_segment=exchange_segment,
-            instrument_type=instr_type,
+            instrument_type=instrument_type,
         )
         data = resp.get("data", {})
         opens  = data.get("open",  [])
@@ -168,8 +197,11 @@ def _backfill_1m(dhan_client, security_id: str, exchange_segment: str,
                 close=float(closes[i]),
                 volume=0,
             ))
-        bar_builder.add_historical_bars(security_id, "1m", bars)
-        logger.info(f"Backfilled {len(bars)} 1m bars for {security_id}")
+        if bars:
+            bar_builder.add_historical_bars(security_id, "1m", bars)
+            logger.info(f"Backfilled {len(bars)} 1m bars for security_id={security_id}")
+        else:
+            logger.debug(f"No intraday bars returned for security_id={security_id} (market closed?)")
     except Exception as e:
         logger.debug(f"Backfill failed for {security_id}: {e}")
 
@@ -293,12 +325,21 @@ class SpikeDetectorApp:
         for symbol, sec_id in eq_ids.items():
             self._eq_sec_to_symbol[sec_id] = symbol
 
-        # 9. Optional backfill
+        # 9. Backfill 1m bars so RSI/MACD have real history from startup.
+        #    Nifty index options are always backfilled (only 4 instruments).
+        #    Stock options are gated by BACKFILL_STOCK_OPTIONS env var (100 API calls).
+        self._set_status("Backfilling Nifty option bars…")
+        for info in nifty_instruments:
+            if info.security_id.isdigit():
+                _backfill_1m(self._dhan, info.security_id, "NSE_FNO",
+                             "OPTIDX", self._bar_builder)
+
         if BACKFILL_STOCK_OPTIONS:
-            self._set_status("Backfilling historical bars…")
+            self._set_status("Backfilling stock option bars…")
             for info in stock_instruments:
                 if info.security_id.isdigit():
-                    _backfill_1m(self._dhan, info.security_id, "NSE_FNO", self._bar_builder)
+                    _backfill_1m(self._dhan, info.security_id, "NSE_FNO",
+                                 "OPTSTK", self._bar_builder)
 
         # 10. Build WebSocket subscription list
         feed_instruments: list[tuple] = [
