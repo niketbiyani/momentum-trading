@@ -4,9 +4,7 @@ instruments master CSV and manages which four contracts to track.
 
 Tracked instruments (for Nifty):
   1. ATM CE   — call at the nearest strike to Nifty spot
-  2. ITM CE   — one strike BELOW ATM for calls (deeper in the money)
-  3. ATM PE   — put at the nearest strike to Nifty spot
-  4. ITM PE   — one strike ABOVE ATM for puts  (deeper in the money)
+  2. ATM PE   — put at the nearest strike to Nifty spot
 
 The manager watches for ATM strike changes and re-resolves security IDs
 whenever the underlying moves through a strike boundary.
@@ -341,13 +339,11 @@ class OptionsManager:
 
     def resolve_instruments(self, spot_price: Optional[float] = None) -> list[OptionInfo]:
         """
-        Return the 4 OptionInfo objects for the current ATM strike.
+        Return the 2 OptionInfo objects for the current ATM strike.
 
         Instruments:
-          0: ATM CE   — strike = ATM,          CE
-          1: ITM CE   — strike = ATM - step,   CE  (one strike ITM for calls)
-          2: ATM PE   — strike = ATM,          PE
-          3: ITM PE   — strike = ATM + step,   PE  (one strike ITM for puts)
+          0: ATM CE   — strike = ATM, CE
+          1: ATM PE   — strike = ATM, PE
         """
         if spot_price is not None:
             self.update_spot(spot_price)
@@ -363,10 +359,8 @@ class OptionsManager:
             self._current_atm = atm
 
         contracts = [
-            (atm,                      "CE", "ATM CE"),
-            (atm - NIFTY_STRIKE_STEP,  "CE", "ITM CE"),
-            (atm,                      "PE", "ATM PE"),
-            (atm + NIFTY_STRIKE_STEP,  "PE", "ITM PE"),
+            (atm, "CE", "ATM CE"),
+            (atm, "PE", "ATM PE"),
         ]
 
         instruments: list[OptionInfo] = []

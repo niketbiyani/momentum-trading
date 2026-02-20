@@ -373,7 +373,7 @@ class SpikeDetectorApp:
 ║        OPTIONS SPIKE DETECTOR  —  Nifty + Nifty 50              ║
 ║  Strategy: Impulse spike → RSI retracement → breakout entry     ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  Tab 1 : Nifty index (ATM CE / ITM CE / ATM PE / ITM PE)        ║
+║  Tab 1 : Nifty index (ATM CE / ATM PE)                          ║
 ║  Tab 2 : ATM CE + ATM PE for {len(NIFTY50_STOCKS)} Nifty 50 stocks         ║
 ║  Timeframes  : 5s / 15s / 1m                                    ║
 ║  Dashboard   : http://localhost:{WEB_PORT}                             ║
@@ -424,7 +424,7 @@ class SpikeDetectorApp:
             # Use a reasonable fallback so we can at least subscribe to something
             self._nifty_spot = 23000.0
 
-        # 5. Resolve Nifty index options (ATM CE, ITM CE, ATM PE, ITM PE)
+        # 5. Resolve Nifty index options (ATM CE, ATM PE)
         self._set_status("Resolving Nifty ATM options…")
         nifty_instruments = self._nifty_manager.resolve_instruments(
             spot_price=self._nifty_spot
@@ -488,7 +488,7 @@ class SpikeDetectorApp:
             logger.info("Bar store: no persisted bars found (fresh start)")
 
         # 9. Backfill 1m bars so RSI/MACD have real history from startup.
-        #    Nifty index options are always backfilled (only 4 instruments).
+        #    Nifty index options are always backfilled (only 2 instruments).
         #    Stock options are gated by BACKFILL_STOCK_OPTIONS env var (100 API calls).
         self._set_status("Backfilling Nifty option bars…")
         for info in nifty_instruments:
