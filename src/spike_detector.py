@@ -178,43 +178,68 @@ class SpikeDetector:
 
     def _find_spike(self, indicators: Indicators) -> Optional[tuple[str, float, int]]:
         """
-        Scan cumulative lookback % moves: pct[N] = (current - N_bars_ago) / N_bars_ago.
-        Pick the window with the largest |pct[N]| across the last SPIKE_LOOKBACK_WINDOWS
-        windows [10, 20, 30, 40, 50 bars].
+        Detect a CONCENTRATED recent spike using lookback_delta values.
 
-        A breakout out of a 40-bar consolidation shows up as pct[10] = large,
-        whereas pct[40] ≈ 0 (consolidation) — this correctly captures it.
-        Returns (direction, magnitude, lookback_bars) or None.
+        delta[N] = pct[N] - pct[N-10] = the 10-bar move ending N bars ago.
+          delta[10] = pct[10]           -> move in the LAST 10 bars (most current)
+          delta[20] = pct[20] - pct[10] -> move in bars 11-20 ago (one period back)
+
+        Only the 2 most recent delta windows [10, 20] are checked. This ensures
+        we detect FRESH spikes, not accumulated trend drift. A PE that has been
+        rising for 50 bars shows pct[50]=51% but delta[10]=-1.6% — correctly
+        signalling no current spike.
+
+        Staleness guard for delta[20]: if the concentrated move happened 11-20
+        bars ago but pct[10] has already reversed direction, the spike is over.
+
+        RSI confirmation: RSI must have hit overbought (>=70) or oversold (<=30)
+        within the spike window to confirm the move had real momentum.
+
+        Returns (direction, magnitude_pct, lookback_window) or None.
         """
-        pct = indicators.lookback_pct
-        recent = LOOKBACK_PERIODS[:SPIKE_LOOKBACK_WINDOWS]  # [10, 20, 30, 40, 50]
+        delta = indicators.lookback_delta
+        pct   = indicators.lookback_pct
 
-        best_pct = 0.0
+        # Only look at the two most recent 10-bar windows
+        FRESH_WINDOWS = [10, 20]
+
+        best_delta  = 0.0
         best_window = 0
 
-        for lb in recent:
-            p = pct.get(lb)
-            if p is None:
+        for lb in FRESH_WINDOWS:
+            d = delta.get(lb)
+            if d is None:
                 continue
-            if abs(p) > abs(best_pct):
-                best_pct = p
+            if abs(d) > abs(best_delta):
+                best_delta  = d
                 best_window = lb
 
-        if abs(best_pct) >= _THRESH:
-            direction = "UP" if best_pct > 0 else "DOWN"
-            # Require RSI to have hit overbought/oversold WITHIN the spike window.
-            # This confirms the price move was driven by real momentum, not a quiet grind.
-            if direction == "UP":
-                rsi_peak = indicators.rsi_max_by_window.get(best_window)
-                if rsi_peak is None or rsi_peak < RSI_OVERBOUGHT:
-                    return None
-            else:
-                rsi_trough = indicators.rsi_min_by_window.get(best_window)
-                if rsi_trough is None or rsi_trough > RSI_OVERSOLD:
-                    return None
-            return direction, abs(best_pct), best_window
+        if abs(best_delta) < _THRESH:
+            return None
 
-        return None
+        direction = "UP" if best_delta > 0 else "DOWN"
+
+        # Staleness guard: if the spike was in bars 11-20 (delta[20] is best),
+        # the current 10-bar move (pct[10]) must not have reversed direction.
+        if best_window == 20:
+            current_pct = pct.get(10)
+            if current_pct is not None:
+                if direction == "UP"   and current_pct < 0:
+                    return None   # spike reversed — price is now falling
+                if direction == "DOWN" and current_pct > 0:
+                    return None   # spike reversed
+
+        # RSI must have hit overbought/oversold WITHIN the spike window
+        if direction == "UP":
+            rsi_peak = indicators.rsi_max_by_window.get(best_window)
+            if rsi_peak is None or rsi_peak < RSI_OVERBOUGHT:
+                return None
+        else:
+            rsi_trough = indicators.rsi_min_by_window.get(best_window)
+            if rsi_trough is None or rsi_trough > RSI_OVERSOLD:
+                return None
+
+        return direction, abs(best_delta), best_window
 
     def _all_conditions_met(self, state: SpikeState, ind: Indicators) -> bool:
         """RSI is above/below the trend threshold AND MACD confirms direction."""
@@ -237,7 +262,7 @@ class SpikeDetector:
         spike_window = state.spike_window if state else 0
 
         msg_map = {
-            SignalStatus.SPIKE:   f"Spike {spike_pct:.1f}% vs {spike_window} bars ago — waiting for RSI/MACD",
+            SignalStatus.SPIKE:   f"Spike {spike_pct:.1f}% in last {spike_window} bars — waiting for RSI/MACD",
             SignalStatus.WATCH:   f"All conditions met — watch for breakout (RSI={ind.rsi:.1f}, MACD={'↑' if ind.macd_hist > 0 else '↓'})",
             SignalStatus.ENTRY:   f"BREAKOUT CONFIRMED — Enter {direction}! (RSI={ind.rsi:.1f})",
             SignalStatus.EXPIRED: "Signal expired — conditions broken",
