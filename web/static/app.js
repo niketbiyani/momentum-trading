@@ -267,7 +267,6 @@ function renderNiftyTab() {
   });
 
   tbody.innerHTML = rows.join('');
-  updateTickCharts(opts);
   renderNiftySignals();
 }
 
@@ -451,94 +450,5 @@ document.querySelectorAll('.tf-btn').forEach(btn => {
   btn.addEventListener('click', () => sendTf(btn.dataset.tf));
 });
 
-// ── Tick Charts (Lightweight Charts) ─────────────────────────────────────────
-const CHART_KEYS = [
-  { key: 'ATM_CE', color: '#3fb950' },
-  { key: 'ATM_PE', color: '#f85149' },
-];
-const _charts    = {};   // key -> LightweightCharts chart instance
-const _series    = {};   // key -> LineSeries instance
-const _lastTickTs = {};  // key -> last appended timestamp (ms)
-
-function initCharts() {
-  if (typeof LightweightCharts === 'undefined') return;
-  for (const { key, color } of CHART_KEYS) {
-    const container = document.getElementById('chart-' + key);
-    if (!container || _charts[key]) continue;
-
-    const chart = LightweightCharts.createChart(container, {
-      width:  container.offsetWidth || 600,
-      height: 200,
-      layout: {
-        background: { color: '#0d1117' },
-        textColor:  '#8b949e',
-      },
-      grid: {
-        vertLines: { color: '#21262d' },
-        horzLines: { color: '#21262d' },
-      },
-      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-      rightPriceScale: { borderColor: '#21262d' },
-      timeScale: {
-        borderColor:    '#21262d',
-        timeVisible:    true,
-        secondsVisible: true,
-      },
-      handleScroll: true,
-      handleScale:  true,
-    });
-
-    const series = chart.addLineSeries({
-      color,
-      lineWidth:        1,
-      priceLineVisible: false,
-      lastValueVisible: true,
-      crosshairMarkerVisible: true,
-    });
-
-    _charts[key]    = chart;
-    _series[key]    = series;
-    _lastTickTs[key] = 0;
-  }
-
-  window.addEventListener('resize', () => {
-    for (const { key } of CHART_KEYS) {
-      const el = document.getElementById('chart-' + key);
-      if (_charts[key] && el) _charts[key].applyOptions({ width: el.offsetWidth });
-    }
-  });
-}
-
-function updateTickCharts(opts) {
-  if (typeof LightweightCharts === 'undefined') return;
-  for (const { key } of CHART_KEYS) {
-    const opt   = opts && opts[key];
-    const ticks = opt && opt.ticks;
-    if (!ticks || !ticks.length || !_series[key]) continue;
-
-    const lastTs    = _lastTickTs[key];
-    const newPoints = ticks
-      .filter(([ts]) => ts > lastTs)
-      .map(([ts, ltp]) => ({ time: Math.floor(ts / 1000), value: ltp }));
-
-    if (!newPoints.length) continue;
-
-    if (lastTs === 0) {
-      // First load — deduplicate by time (Lightweight Charts requires strictly ascending)
-      const seen = new Map();
-      for (const pt of newPoints) seen.set(pt.time, pt.value);
-      const deduped = Array.from(seen.entries())
-        .sort(([a], [b]) => a - b)
-        .map(([time, value]) => ({ time, value }));
-      _series[key].setData(deduped);
-    } else {
-      for (const pt of newPoints) _series[key].update(pt);
-    }
-
-    _lastTickTs[key] = ticks[ticks.length - 1][0];
-  }
-}
-
 // ── Boot ──────────────────────────────────────────────────────────────────────
-initCharts();
 connect();
