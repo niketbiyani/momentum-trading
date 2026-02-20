@@ -9,7 +9,6 @@ let state = {
 let activeTf  = '1m';
 let activeTab = 'nifty';   // 'nifty' | 'stocks'
 let lbTf      = '1m';      // timeframe used for lookback heatmap
-let lbMode    = 'pct';    // 'pct' = cumulative % vs N bars ago | 'delta' = move within each window
 let searchQuery = '';
 let reconnectDelay = 1000;
 
@@ -401,13 +400,9 @@ function renderLookbackHeatmap() {
   const nifty = state.nifty || {};
   const opts  = nifty.options || {};
 
-  // Update column header hints based on current mode
-  const isDelta = (lbMode === 'delta');
+  // Update column header hints
   document.querySelectorAll('#lookback-table thead th[data-lb-period]').forEach(th => {
-    const p = th.dataset.lbPeriod;
-    th.title = isDelta
-      ? `Move within bars ${Number(p)-9}–${p} ago (delta window)`
-      : `Current price vs ${p} bars ago (cumulative)`;
+    th.title = `Current price vs ${th.dataset.lbPeriod} bars ago (cumulative)`;
   });
 
   const ORDER = [
@@ -420,7 +415,7 @@ function renderLookbackHeatmap() {
   const rows = ORDER.map(({ key, label, cls }) => {
     const opt  = opts[key];
     const ind  = (opt && opt.indicators && opt.indicators[lbTf]) || {};
-    const data = isDelta ? (ind.lb_delta || {}) : (ind.lb_pct || {});
+    const data = ind.lb_pct || {};
 
     const cells = LB_PERIODS.map(p => {
       const v = data[String(p)];
@@ -429,10 +424,7 @@ function renderLookbackHeatmap() {
       const valCls  = v > 0 ? 'hc-pos' : v < 0 ? 'hc-neg' : 'hc-neu';
       const bgStyle = bg ? `background:${bg};` : '';
       const sign    = v > 0 ? '+' : '';
-      const tip     = isDelta
-        ? `Bars ${Number(p)-9}–${p} ago: ${sign}${v.toFixed(2)}%`
-        : `vs ${p} bars ago: ${sign}${v.toFixed(2)}%`;
-      return `<td class="${valCls}" style="${bgStyle}" title="${tip}">${sign}${v.toFixed(1)}%</td>`;
+      return `<td class="${valCls}" style="${bgStyle}" title="vs ${p} bars ago: ${sign}${v.toFixed(2)}%">${sign}${v.toFixed(1)}%</td>`;
     }).join('');
 
     return `<tr><td class="${cls}">${label}</td>${cells}</tr>`;
@@ -453,28 +445,6 @@ document.querySelectorAll('.lb-tf-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     lbTf = btn.dataset.lbtf;
     updateLbTfButtons();
-    renderLookbackHeatmap();
-  });
-});
-
-// ── Lookback mode buttons (pct vs delta) ─────────────────────────────────────
-function updateLbModeButtons() {
-  document.querySelectorAll('.lb-mode-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.lbmode === lbMode);
-  });
-  // Update section description text
-  const desc = document.getElementById('lb-mode-desc');
-  if (desc) {
-    desc.textContent = lbMode === 'delta'
-      ? 'Each cell = move within that 10-bar window — shows WHERE the spike happened'
-      : 'Each cell = cumulative % move since N bars ago — shows total magnitude';
-  }
-}
-
-document.querySelectorAll('.lb-mode-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    lbMode = btn.dataset.lbmode;
-    updateLbModeButtons();
     renderLookbackHeatmap();
   });
 });

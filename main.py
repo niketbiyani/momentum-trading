@@ -650,6 +650,10 @@ class SpikeDetectorApp:
                             )
                             if closes:
                                 engine.load_closes(closes)
+                                # Keep dashboard indicators live on every tick so
+                                # the heatmap (5s/15s/1m) always reflects current bars.
+                                if state:
+                                    state.indicators[tf] = engine.compute()
 
                 processed += 1
 

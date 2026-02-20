@@ -4,35 +4,28 @@ Spike Detector & Signal Engine
 Implements the user's strategy:
 
   STEP 1 — SPIKE detection
-    Within the lookback table, find a 10-bar window where the price moved
-    ≥ SPIKE_THRESHOLD_PCT. The delta table (delta[N] = pct[N] - pct[N-10])
-    reveals exactly which window had the acceleration.
+    Scan lookback windows [10, 20, 30, 40, 50 bars].
+    pct[N] = (current_price - price_N_bars_ago) / price_N_bars_ago * 100
+    If the best |pct[N]| ≥ SPIKE_THRESHOLD_PCT → spike detected.
+    This compares current price to N bars ago (cumulative), so a 10-bar
+    breakout out of a 40-bar consolidation is always captured by pct[10].
 
-  STEP 2 — RSI confirmation (from the spike)
-    For an UP spike: RSI must have reached overbought (≥ 70) during the spike.
-    For a DOWN spike: RSI must have reached oversold  (≤ 30) during the spike.
-    We approximate this by checking if current RSI + trend is consistent with
-    having been OB/OS and then retracing.
+  STEP 2 — RSI + MACD confirmation (evaluated immediately)
+    UP spike  → RSI ≥ RSI_UP_MIN (45) AND MACD histogram > 0
+    DOWN spike → RSI ≤ RSI_DOWN_MAX (55) AND MACD histogram < 0
+    If all conditions are met at detection time → emit WATCH directly.
+    If not yet met → emit SPIKE (waiting).
 
-  STEP 3 — RSI boundary check (current)
-    After the spike + retracement:
-      UP move  → RSI must NOT have dropped below RSI_UP_MIN  (default 45)
-      DOWN move → RSI must NOT have risen  above RSI_DOWN_MAX (default 55)
-
-  STEP 4 — MACD alignment
-    UP move  → MACD histogram > 0  (bullish momentum)
-    DOWN move → MACD histogram < 0  (bearish momentum)
-
-  STEP 5 — WATCH signal
-    All conditions met → emit a WATCH signal.
+  STEP 3 — WATCH signal
+    All conditions met → emit WATCH.
     The trader then waits for a small consolidation and enters on the
     breakout of that consolidation's high (UP) or low (DOWN).
 
 Signal lifecycle:
-  SPIKE  → conditions partially met (spike seen, waiting for RSI/MACD)
-  WATCH  → all conditions met (look for breakout entry)
+  SPIKE  → large move seen, RSI/MACD not yet confirmed
+  WATCH  → spike + RSI + MACD all confirmed (look for breakout entry)
   ENTRY  → breakout confirmed — this is the entry alert
-  EXPIRED → conditions broken (RSI went through boundary or MACD flipped)
+  EXPIRED → conditions broken (RSI crossed boundary or MACD flipped)
 """
 import threading
 import logging
@@ -42,8 +35,6 @@ from typing import Optional
 
 from config import (
     SPIKE_THRESHOLD_PCT,
-    RSI_OVERBOUGHT,
-    RSI_OVERSOLD,
     RSI_UP_MIN,
     RSI_DOWN_MAX,
     LOOKBACK_PERIODS,
@@ -64,11 +55,9 @@ class SpikeState:
 
     def __init__(self, direction: str, spike_pct: float, spike_window: int):
         self.direction = direction          # "UP" or "DOWN"
-        self.spike_pct = spike_pct         # magnitude of spike delta
-        self.spike_window = spike_window   # which 10-bar window (e.g. 20 means bars 11-20)
+        self.spike_pct = spike_pct         # magnitude of the best pct[N] move
+        self.spike_window = spike_window   # lookback window with the largest pct (e.g. 10 = "vs 10 bars ago")
         self.status = SignalStatus.SPIKE
-        self.rsi_min_since_spike: float = 100.0   # track RSI low after an up spike
-        self.rsi_max_since_spike: float = 0.0     # track RSI high after a down spike
         self.created_at = datetime.now()
         self.last_updated = datetime.now()
         # For breakout detection
@@ -116,15 +105,18 @@ class SpikeDetector:
                 if spike_info:
                     direction, spike_pct, spike_window = spike_info
                     self._state = SpikeState(direction, spike_pct, spike_window)
+                    # If RSI + MACD conditions are already met, jump straight to WATCH
+                    if self._all_conditions_met(self._state, indicators):
+                        self._state.status = SignalStatus.WATCH
+                        self._state.consolidation_high = current_bar_high
+                        self._state.consolidation_low = current_bar_low
+                        self._state.consol_bars = 1
+                        return self._emit(indicators, SignalStatus.WATCH)
                     return self._emit(indicators, SignalStatus.SPIKE)
                 return None
 
             # ── Active state exists ──────────────────────────────────────────
             state = self._state
-
-            # Track RSI extremes since spike
-            state.rsi_min_since_spike = min(state.rsi_min_since_spike, indicators.rsi)
-            state.rsi_max_since_spike = max(state.rsi_max_since_spike, indicators.rsi)
             state.last_updated = datetime.now()
 
             # Check if conditions are now broken → expire the signal
@@ -184,41 +176,40 @@ class SpikeDetector:
 
     def _find_spike(self, indicators: Indicators) -> Optional[tuple[str, float, int]]:
         """
-        Scan the delta table for any recent window with a large move.
-        Returns (direction, magnitude, window_bars) or None.
-        """
-        delta = indicators.lookback_delta
-        # Only look at the most recent SPIKE_LOOKBACK_WINDOWS windows
-        recent = LOOKBACK_PERIODS[:SPIKE_LOOKBACK_WINDOWS]
+        Scan cumulative lookback % moves: pct[N] = (current - N_bars_ago) / N_bars_ago.
+        Pick the window with the largest |pct[N]| across the last SPIKE_LOOKBACK_WINDOWS
+        windows [10, 20, 30, 40, 50 bars].
 
-        best_delta = 0.0
+        A breakout out of a 40-bar consolidation shows up as pct[10] = large,
+        whereas pct[40] ≈ 0 (consolidation) — this correctly captures it.
+        Returns (direction, magnitude, lookback_bars) or None.
+        """
+        pct = indicators.lookback_pct
+        recent = LOOKBACK_PERIODS[:SPIKE_LOOKBACK_WINDOWS]  # [10, 20, 30, 40, 50]
+
+        best_pct = 0.0
         best_window = 0
 
         for lb in recent:
-            d = delta.get(lb)
-            if d is None:
+            p = pct.get(lb)
+            if p is None:
                 continue
-            if abs(d) > abs(best_delta):
-                best_delta = d
+            if abs(p) > abs(best_pct):
+                best_pct = p
                 best_window = lb
 
-        if abs(best_delta) >= _THRESH:
-            direction = "UP" if best_delta > 0 else "DOWN"
-            return direction, abs(best_delta), best_window
+        if abs(best_pct) >= _THRESH:
+            direction = "UP" if best_pct > 0 else "DOWN"
+            return direction, abs(best_pct), best_window
 
         return None
 
     def _all_conditions_met(self, state: SpikeState, ind: Indicators) -> bool:
-        """Check all three conditions: RSI boundary, MACD alignment, RSI level."""
+        """RSI is above/below the trend threshold AND MACD confirms direction."""
         if state.direction == "UP":
-            # RSI must not have dropped below RSI_UP_MIN since the spike
-            rsi_ok = state.rsi_min_since_spike >= RSI_UP_MIN and ind.rsi >= RSI_UP_MIN
-            macd_ok = ind.macd_hist > 0
+            return ind.rsi >= RSI_UP_MIN and ind.macd_hist > 0
         else:  # DOWN
-            # RSI must not have risen above RSI_DOWN_MAX since the spike
-            rsi_ok = state.rsi_max_since_spike <= RSI_DOWN_MAX and ind.rsi <= RSI_DOWN_MAX
-            macd_ok = ind.macd_hist < 0
-        return rsi_ok and macd_ok
+            return ind.rsi <= RSI_DOWN_MAX and ind.macd_hist < 0
 
     def _is_expired(self, state: SpikeState, ind: Indicators) -> bool:
         """Return True if the conditions that generated the signal are now invalid."""
@@ -234,7 +225,7 @@ class SpikeDetector:
         spike_window = state.spike_window if state else 0
 
         msg_map = {
-            SignalStatus.SPIKE:   f"Spike {spike_pct:.1f}% in last {spike_window} bars — waiting for RSI/MACD",
+            SignalStatus.SPIKE:   f"Spike {spike_pct:.1f}% vs {spike_window} bars ago — waiting for RSI/MACD",
             SignalStatus.WATCH:   f"All conditions met — watch for breakout (RSI={ind.rsi:.1f}, MACD={'↑' if ind.macd_hist > 0 else '↓'})",
             SignalStatus.ENTRY:   f"BREAKOUT CONFIRMED — Enter {direction}! (RSI={ind.rsi:.1f})",
             SignalStatus.EXPIRED: "Signal expired — conditions broken",
