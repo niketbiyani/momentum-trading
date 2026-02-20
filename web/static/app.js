@@ -158,7 +158,7 @@ function tfCells(opt, tfList) {
     const ind     = (opt && opt.indicators) ? (opt.indicators[tf] || {}) : {};
     const rsi     = ind.rsi          != null ? ind.rsi          : null;
     const mh      = ind.macd_hist    != null ? ind.macd_hist    : null;
-    const spk     = ind.spk10        != null ? ind.spk10        : null;
+    const spk     = ind.spk_10m      != null ? ind.spk_10m      : null;
     const zscore  = ind.spike_zscore != null ? ind.spike_zscore : null;
     const nBars   = ind.bars         != null ? ind.bars         : 0;
 

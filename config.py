@@ -25,6 +25,12 @@ MACD_FAST = int(os.getenv("MACD_FAST", "12"))
 MACD_SLOW = int(os.getenv("MACD_SLOW", "26"))
 MACD_SIGNAL_PERIOD = int(os.getenv("MACD_SIGNAL", "9"))
 
+# Minimum bars before each indicator produces a real value (not a seed/default).
+# Below these counts the web state sends None so the UI shows "—" not 50/0.
+RSI_MIN_BARS     = RSI_PERIOD + 1                       # 15 bars
+RSI_EMA_MIN_BARS = RSI_PERIOD + RSI_EMA_PERIOD          # 64 bars
+MACD_MIN_BARS    = MACD_SLOW  + MACD_SIGNAL_PERIOD      # 35 bars
+
 # ── Lookback Table ─────────────────────────────────────────────────────────────
 LOOKBACK_START = int(os.getenv("LOOKBACK_START", "10"))
 LOOKBACK_END = int(os.getenv("LOOKBACK_END", "150"))
@@ -41,6 +47,17 @@ TIMEFRAMES = {
 # Which TF labels to show in each tab
 NIFTY_TIMEFRAMES  = ["5s", "15s", "1m"]   # Nifty index options tab
 STOCK_TIMEFRAMES  = ["1m", "3m"]           # Nifty 50 stocks tab
+
+# For each TF, how many bars equals a 10-minute wall-clock window.
+# Used so "Spk%" always shows the 10-min % move regardless of bar frequency,
+# making the number directly comparable across 5s, 15s, and 1m columns.
+# 3m has no better option — nearest valid lookback is pct[10] = 30 min.
+TF_10MIN_BARS: dict[str, int] = {
+    "5s":  120,   # 120 × 5s  = 600s = 10 min
+    "15s":  40,   # 40  × 15s = 600s = 10 min
+    "1m":   10,   # 10  × 1m  = 600s = 10 min
+    "3m":   10,   # 10  × 3m  = 30 min (best available)
+}
 
 # ── Nifty / Options Settings ──────────────────────────────────────────────────
 NIFTY_SECURITY_ID = "13"         # Nifty 50 index security ID on Dhan

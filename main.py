@@ -62,6 +62,10 @@ from config import (
     BACKFILL_STOCK_OPTIONS,
     WEB_HOST,
     WEB_PORT,
+    TF_10MIN_BARS,
+    RSI_MIN_BARS,
+    RSI_EMA_MIN_BARS,
+    MACD_MIN_BARS,
 )
 from src.models import Bar, Tick, InstrumentState, OptionInfo, Signal
 from src.bar_builder import MultiInstrumentBarBuilder
@@ -699,15 +703,25 @@ class SpikeDetectorApp:
                         for k, v in ind.lookback_delta.items()
                         if k <= 100
                     }
+                    n_bars    = len(state.bars.get(tf, []))
+                    tf_10m_lb = TF_10MIN_BARS.get(tf, 10)  # bars equiv to 10 min for this TF
+
                     indicators_by_tf[tf] = {
-                        "rsi":             round(ind.rsi, 1),
-                        "rsi_ema":         round(ind.rsi_ema, 1),
-                        "macd_hist":       round(ind.macd_hist, 4),
-                        "bars":            len(state.bars.get(tf, [])),
+                        # RSI / MACD: send None when bars < minimum so UI shows "—"
+                        # instead of the misleading seed values (RSI=50, MACD=0)
+                        "rsi":      round(ind.rsi, 1)      if n_bars >= RSI_MIN_BARS  else None,
+                        "rsi_ema":  round(ind.rsi_ema, 1)  if n_bars >= RSI_EMA_MIN_BARS else None,
+                        "macd_hist":round(ind.macd_hist, 4) if n_bars >= MACD_MIN_BARS else None,
+                        "bars":            n_bars,
                         "signal_status":   sig.status    if sig else None,
                         "signal_direction":sig.direction if sig else None,
-                        # 10-bar lookback % — quick single-number spike indicator
-                        "spk10":           round(ind.lookback_pct.get(10) or 0, 2),
+                        # Spk%: 10-min equivalent move — same wall-clock window on all TFs.
+                        # 5s→pct[120], 15s→pct[40], 1m→pct[10] all = 600 seconds of move.
+                        # None during warmup (not enough bars yet); UI shows building counter.
+                        "spk_10m": (
+                            round(ind.lookback_pct.get(tf_10m_lb) or 0, 2)
+                            if n_bars > tf_10m_lb else None
+                        ),
                         # Cumulative % move: current price vs N bars ago
                         "lb_pct":          lb_pct,
                         # Delta % move: move WITHIN each 10-bar window (for pinpointing spike)
