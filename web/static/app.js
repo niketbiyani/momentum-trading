@@ -227,12 +227,10 @@ function renderNiftyTab() {
     ? '₹' + Number(spot).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : '—';
 
-  // Render the 4 option rows: ATM CE, ITM CE, ATM PE, ITM PE
+  // Render the 2 option rows: ATM CE, ATM PE
   const ORDER = [
     { key: 'ATM_CE', label: 'ATM CE', cls: 'opt-ce row-atm' },
-    { key: 'ITM_CE', label: 'ITM CE', cls: 'opt-ce row-itm' },
     { key: 'ATM_PE', label: 'ATM PE', cls: 'opt-pe row-atm' },
-    { key: 'ITM_PE', label: 'ITM PE', cls: 'opt-pe row-itm' },
   ];
 
   const tbody = document.getElementById('nifty-body');
@@ -407,9 +405,7 @@ function renderLookbackHeatmap() {
 
   const ORDER = [
     { key: 'ATM_CE', label: 'ATM CE', cls: 'opt-ce' },
-    { key: 'ITM_CE', label: 'ITM CE', cls: 'opt-ce' },
     { key: 'ATM_PE', label: 'ATM PE', cls: 'opt-pe' },
-    { key: 'ITM_PE', label: 'ITM PE', cls: 'opt-pe' },
   ];
 
   const rows = ORDER.map(({ key, label, cls }) => {
