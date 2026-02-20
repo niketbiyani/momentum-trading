@@ -12,7 +12,13 @@ WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
 
 # ── Spike Detection ───────────────────────────────────────────────────────────
-SPIKE_THRESHOLD_PCT = float(os.getenv("SPIKE_THRESHOLD_PCT", "5.0"))
+# Primary gate: how many standard deviations above the 100-bar baseline mean
+# the concentrated 10-bar delta must be to qualify as a spike.
+# z >= 2.0 = top ~2.3% of moves — a genuine statistical outlier.
+SPIKE_ZSCORE_MIN    = float(os.getenv("SPIKE_ZSCORE_MIN", "2.0"))
+# Kept as a hard-floor fallback: even a statistically large move must be at
+# least this big in absolute terms to avoid tiny-variance instruments firing.
+SPIKE_THRESHOLD_PCT = float(os.getenv("SPIKE_THRESHOLD_PCT", "1.0"))
 RSI_OVERBOUGHT = float(os.getenv("RSI_OVERBOUGHT", "70"))
 RSI_OVERSOLD = float(os.getenv("RSI_OVERSOLD", "30"))
 RSI_UP_MIN = float(os.getenv("RSI_UP_MIN", "45"))       # RSI must stay above this after up-spike

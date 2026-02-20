@@ -233,42 +233,43 @@ def calc_lookback_pct(closes: list[float]) -> dict[int, float | None]:
 
 def calc_spike_zscore(closes: list[float],
                       spike_window: int = 10,
-                      baseline_bars: int = 100) -> float | None:
+                      baseline_bars: int = 100,
+                      offset: int = 0) -> float | None:
     """
-    Z-score of the current spike_window % move vs its historical distribution.
+    Z-score of a spike_window % move vs its historical distribution.
 
-    z = (current_move - mean_baseline) / std_baseline
+    z = (|current_move| - mean_baseline) / std_baseline
 
-    A z-score of +2 means the current move is 2 standard deviations above the
-    historical mean — a genuine statistical outlier. This is more informative
-    than a simple ratio because it accounts for how *spread out* the baseline
-    moves are (high-vol vs low-vol instruments are auto-normalised).
+    offset=0  → measures the current spike_window bars (delta[10]):
+                 current_move = |closes[-1] - closes[-(spike_window+1)]|
+    offset=N  → measures the spike_window bars ending N bars ago (delta[20] when N=10):
+                 current_move = |closes[-(N+1)] - closes[-(N+spike_window+1)]|
 
-    - Current move  : |% change over last spike_window bars|
-    - Baseline      : rolling spike_window % moves for the baseline_bars
-                      positions *before* the current window (1 sample per bar)
-    - Returns       : z-score (e.g. 3.1 = 3.1σ above baseline mean)
-                      None if not enough data or std ≈ 0 (frozen market)
+    The baseline is always 100 rolling spike_window moves taken from AFTER the
+    measured window, so the measured window never contaminates its own baseline.
 
-    Display use only — not used as a gate for signal generation.
+    Returns z-score (e.g. 3.1 = 3.1σ above baseline mean), or None when:
+      - not enough bars
+      - std ≈ 0 (frozen/illiquid market)
     """
     n = len(closes)
-    if n < 2 * spike_window + baseline_bars:
+    if n < 2 * spike_window + baseline_bars + offset:
         return None
 
-    current_price = closes[-1]
-    past_price = closes[-(spike_window + 1)]
-    if past_price <= 0:
+    # The "current" window ends `offset` bars ago
+    end_p  = closes[-(offset + 1)]
+    start_p = closes[-(offset + spike_window + 1)]
+    if start_p <= 0 or end_p <= 0:
         return None
-    current_move = abs((current_price - past_price) / past_price * 100)
+    current_move = abs((end_p - start_p) / start_p * 100)
 
-    # Historical baseline: rolling spike_window % moves, excluding the current window
+    # Historical baseline: rolling spike_window % moves, taken after the measured window
     moves = []
-    for k in range(spike_window, spike_window + baseline_bars):
-        end_p   = closes[-(k + 1)]
-        start_p = closes[-(k + spike_window + 1)]
-        if start_p > 0 and end_p > 0:
-            moves.append(abs((end_p - start_p) / start_p * 100))
+    for k in range(spike_window + offset, spike_window + offset + baseline_bars):
+        ep   = closes[-(k + 1)]
+        sp   = closes[-(k + spike_window + 1)]
+        if sp > 0 and ep > 0:
+            moves.append(abs((ep - sp) / sp * 100))
 
     if len(moves) < 10:
         return None
@@ -347,9 +348,10 @@ class IndicatorEngine:
         rsi_max_by_window, rsi_min_by_window = calc_rsi_extremes_by_window(rsi_series, spike_windows)
 
         macd_line, macd_signal, macd_hist = calc_macd(closes)
-        pct          = calc_lookback_pct(closes)
-        delta        = calc_lookback_delta(pct)
-        spike_zscore = calc_spike_zscore(closes)
+        pct               = calc_lookback_pct(closes)
+        delta             = calc_lookback_delta(pct)
+        spike_zscore      = calc_spike_zscore(closes, offset=0)   # delta[10] z-score
+        spike_zscore_d20  = calc_spike_zscore(closes, offset=10)  # delta[20] z-score
 
         return Indicators(
             rsi=rsi,
@@ -362,6 +364,7 @@ class IndicatorEngine:
             rsi_max_by_window=rsi_max_by_window,
             rsi_min_by_window=rsi_min_by_window,
             spike_zscore=spike_zscore,
+            spike_zscore_d20=spike_zscore_d20,
         )
 
     def bar_count(self) -> int:

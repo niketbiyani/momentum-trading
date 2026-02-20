@@ -11,6 +11,9 @@ Design decisions:
   - Only 5s and 15s timeframes are persisted (1m comes from the API)
   - Bars older than KEEP_DAYS trading days are pruned on startup
   - Write uses INSERT OR REPLACE so restarts never produce duplicates
+  - Single persistent connection (not per-call) to avoid file-descriptor
+    exhaustion when 150+ instruments close bars every 5 seconds.
+    check_same_thread=False + _lock keeps it thread-safe.
 """
 import sqlite3
 import threading
@@ -26,34 +29,44 @@ KEEP_DAYS      = 3               # prune bars older than this many calendar days
 
 
 class BarStore:
-    """Thread-safe SQLite-backed bar store."""
+    """Thread-safe SQLite-backed bar store with a single persistent connection."""
 
     def __init__(self, db_path: Path = DB_PATH):
-        self._db_path = db_path
-        self._lock    = threading.Lock()
+        self._db_path = Path(db_path)
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)  # ensure dir exists
+        self._lock = threading.Lock()
+        # Open one connection for the lifetime of this object.
+        # check_same_thread=False is safe because all access goes through _lock.
+        self._conn = sqlite3.connect(
+            str(self._db_path),
+            check_same_thread=False,
+        )
+        # WAL mode: better concurrent read/write performance
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_db()
 
     # ── Setup ────────────────────────────────────────────────────────────────
 
     def _init_db(self) -> None:
-        with sqlite3.connect(self._db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS bars (
-                    security_id  TEXT    NOT NULL,
-                    tf           TEXT    NOT NULL,
-                    ts           INTEGER NOT NULL,
-                    open         REAL    NOT NULL,
-                    high         REAL    NOT NULL,
-                    low          REAL    NOT NULL,
-                    close        REAL    NOT NULL,
-                    volume       INTEGER NOT NULL,
-                    PRIMARY KEY (security_id, tf, ts)
-                )
-            """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_bars "
-                "ON bars (security_id, tf, ts)"
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS bars (
+                security_id  TEXT    NOT NULL,
+                tf           TEXT    NOT NULL,
+                ts           INTEGER NOT NULL,
+                open         REAL    NOT NULL,
+                high         REAL    NOT NULL,
+                low          REAL    NOT NULL,
+                close        REAL    NOT NULL,
+                volume       INTEGER NOT NULL,
+                PRIMARY KEY (security_id, tf, ts)
             )
+        """)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bars "
+            "ON bars (security_id, tf, ts)"
+        )
+        self._conn.commit()
 
     # ── Write ────────────────────────────────────────────────────────────────
 
@@ -66,12 +79,12 @@ class BarStore:
             return
         ts = int(bar.timestamp.timestamp())
         with self._lock:
-            with sqlite3.connect(self._db_path) as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO bars VALUES (?,?,?,?,?,?,?,?)",
-                    (security_id, tf, ts,
-                     bar.open, bar.high, bar.low, bar.close, bar.volume),
-                )
+            self._conn.execute(
+                "INSERT OR REPLACE INTO bars VALUES (?,?,?,?,?,?,?,?)",
+                (security_id, tf, ts,
+                 bar.open, bar.high, bar.low, bar.close, bar.volume),
+            )
+            self._conn.commit()
 
     # ── Read ─────────────────────────────────────────────────────────────────
 
@@ -88,17 +101,16 @@ class BarStore:
         if tf not in PERSIST_TFS:
             return []
         with self._lock:
-            with sqlite3.connect(self._db_path) as conn:
-                rows = conn.execute(
-                    """
-                    SELECT ts, open, high, low, close, volume
-                    FROM   bars
-                    WHERE  security_id = ? AND tf = ?
-                    ORDER  BY ts DESC
-                    LIMIT  ?
-                    """,
-                    (security_id, tf, max_bars),
-                ).fetchall()
+            rows = self._conn.execute(
+                """
+                SELECT ts, open, high, low, close, volume
+                FROM   bars
+                WHERE  security_id = ? AND tf = ?
+                ORDER  BY ts DESC
+                LIMIT  ?
+                """,
+                (security_id, tf, max_bars),
+            ).fetchall()
 
         # Rows came out newest-first; reverse for chronological order
         return [
@@ -118,8 +130,13 @@ class BarStore:
         """
         cutoff = int((datetime.now() - timedelta(days=keep_days)).timestamp())
         with self._lock:
-            with sqlite3.connect(self._db_path) as conn:
-                cursor = conn.execute(
-                    "DELETE FROM bars WHERE ts < ?", (cutoff,)
-                )
-                return cursor.rowcount
+            cursor = self._conn.execute(
+                "DELETE FROM bars WHERE ts < ?", (cutoff,)
+            )
+            self._conn.commit()
+            return cursor.rowcount
+
+    def close(self) -> None:
+        """Close the database connection cleanly on shutdown."""
+        with self._lock:
+            self._conn.close()

@@ -49,9 +49,10 @@ class Indicators:
     rsi_max_by_window: dict = field(default_factory=dict)   # {10: 78.2, 20: 80.1, ...}
     # RSI trough within last N bars — used to confirm oversold crossing in spike window
     rsi_min_by_window: dict = field(default_factory=dict)   # {10: 22.5, 20: 19.8, ...}
-    # Z-score: (current 10b move - mean baseline) / std baseline
-    # e.g. 3.2 = current move is 3.2σ above the historical mean — a genuine outlier
+    # Z-score for delta[10]: (current 10b move - mean baseline) / std baseline
     spike_zscore: float | None = None
+    # Z-score for delta[20]: same metric for the move in bars 11-20 ago
+    spike_zscore_d20: float | None = None
 
 
 @dataclass

@@ -35,6 +35,7 @@ from typing import Optional
 
 from config import (
     SPIKE_THRESHOLD_PCT,
+    SPIKE_ZSCORE_MIN,
     RSI_OVERBOUGHT,
     RSI_OVERSOLD,
     RSI_UP_MIN,
@@ -45,11 +46,14 @@ from src.models import Signal, SignalStatus, Indicators, OptionInfo
 
 logger = logging.getLogger(__name__)
 
-# How many recent 10-bar windows to check for a spike (covers last N*10 bars)
-SPIKE_LOOKBACK_WINDOWS = 5   # checks windows ending at 10, 20, 30, 40, 50 bars ago
+# Minimum z-score for a delta window to be considered a spike.
+# A z-score of 2.0 means the concentrated move is 2σ above the 100-bar mean —
+# a genuine statistical outlier, not random noise.
+_ZSCORE_MIN = SPIKE_ZSCORE_MIN
 
-# Minimum absolute delta to call it a spike
-_THRESH = SPIKE_THRESHOLD_PCT
+# Hard-floor: even statistically significant moves must be at least this large
+# in absolute % terms (guards against tiny-variance instruments).
+_ABS_FLOOR = SPIKE_THRESHOLD_PCT  # default 1.0%
 
 
 class SpikeState:
@@ -178,56 +182,60 @@ class SpikeDetector:
 
     def _find_spike(self, indicators: Indicators) -> Optional[tuple[str, float, int]]:
         """
-        Detect a CONCENTRATED recent spike using lookback_delta values.
+        Detect a statistically significant concentrated spike using z-scores.
 
-        delta[N] = pct[N] - pct[N-10] = the 10-bar move ending N bars ago.
-          delta[10] = pct[10]           -> move in the LAST 10 bars (most current)
-          delta[20] = pct[20] - pct[10] -> move in bars 11-20 ago (one period back)
+        For each of the two most recent 10-bar delta windows, compare the actual
+        move to the historical distribution (100-bar rolling baseline):
 
-        Only the 2 most recent delta windows [10, 20] are checked. This ensures
-        we detect FRESH spikes, not accumulated trend drift. A PE that has been
-        rising for 50 bars shows pct[50]=51% but delta[10]=-1.6% — correctly
-        signalling no current spike.
+          delta[10] (window = 10): z-score from ind.spike_zscore
+            → move in the LAST 10 bars vs history
+          delta[20] (window = 20): z-score from ind.spike_zscore_d20
+            → move in bars 11-20 ago vs history
 
-        Staleness guard for delta[20]: if the concentrated move happened 11-20
-        bars ago but pct[10] has already reversed direction, the spike is over.
+        A z-score >= SPIKE_ZSCORE_MIN (default 2.0) means the move is 2+
+        standard deviations above the historical mean — a genuine outlier.
+        The hard-floor absolute check (>= 1%) guards against illiquid
+        instruments where std is near-zero.
+
+        The staleness guard (pct[10] < 0) has been removed: "as long as
+        RSI > 45 for an uptrend we are safe" — if the option has spiked
+        11-20 bars ago and RSI is still above 45, the move is still in play.
+        The _is_expired() check handles cleanup when conditions break.
 
         RSI confirmation: RSI must have hit overbought (>=70) or oversold (<=30)
-        within the spike window to confirm the move had real momentum.
+        within the spike window to confirm the move was driven by real momentum.
 
         Returns (direction, magnitude_pct, lookback_window) or None.
         """
         delta = indicators.lookback_delta
-        pct   = indicators.lookback_pct
 
-        # Only look at the two most recent 10-bar windows
-        FRESH_WINDOWS = [10, 20]
+        # Map each delta window to its pre-computed z-score
+        window_zscores = {
+            10: indicators.spike_zscore,
+            20: indicators.spike_zscore_d20,
+        }
 
-        best_delta  = 0.0
+        best_z      = 0.0
         best_window = 0
+        best_delta  = 0.0
 
-        for lb in FRESH_WINDOWS:
+        for lb in [10, 20]:
             d = delta.get(lb)
-            if d is None:
+            z = window_zscores.get(lb)
+            if d is None or z is None:
                 continue
-            if abs(d) > abs(best_delta):
-                best_delta  = d
+            # Hard-floor: absolute move must be meaningful
+            if abs(d) < _ABS_FLOOR:
+                continue
+            if z > best_z:
+                best_z      = z
                 best_window = lb
+                best_delta  = d
 
-        if abs(best_delta) < _THRESH:
+        if best_z < _ZSCORE_MIN:
             return None
 
         direction = "UP" if best_delta > 0 else "DOWN"
-
-        # Staleness guard: if the spike was in bars 11-20 (delta[20] is best),
-        # the current 10-bar move (pct[10]) must not have reversed direction.
-        if best_window == 20:
-            current_pct = pct.get(10)
-            if current_pct is not None:
-                if direction == "UP"   and current_pct < 0:
-                    return None   # spike reversed — price is now falling
-                if direction == "DOWN" and current_pct > 0:
-                    return None   # spike reversed
 
         # RSI must have hit overbought/oversold WITHIN the spike window
         if direction == "UP":

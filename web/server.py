@@ -47,6 +47,9 @@ _loop: asyncio.AbstractEventLoop | None = None
 app = FastAPI(title="Options Spike Detector")
 
 _STATIC_DIR = Path(__file__).parent / "static"
+# Read once at startup — avoids opening the file on every browser request,
+# which under high load could exhaust OS file descriptors.
+_INDEX_HTML: str = (_STATIC_DIR / "index.html").read_text()
 
 
 @app.on_event("startup")
@@ -59,7 +62,7 @@ async def _on_startup() -> None:
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
-    return HTMLResponse((_STATIC_DIR / "index.html").read_text())
+    return HTMLResponse(_INDEX_HTML)
 
 
 @app.websocket("/ws")
