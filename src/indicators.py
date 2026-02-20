@@ -195,6 +195,55 @@ def calc_lookback_pct(closes: list[float]) -> dict[int, float | None]:
     return result
 
 
+def calc_spike_ratio(closes: list[float],
+                     spike_window: int = 10,
+                     baseline_bars: int = 100) -> float | None:
+    """
+    Compares the current spike_window % move to the historical median.
+
+    Strategy context: a 10% move is only meaningful if the typical move
+    over the last 100 bars is 2-3%. This ratio tells you how many times
+    larger the current move is vs the baseline "normal" move.
+
+    - Current move  : |% change over last spike_window bars|
+    - Baseline      : median of |spike_window % moves| for each of the
+                      baseline_bars positions *before* the current window
+                      (rolling, 1 sample per bar — excludes current spike
+                      to avoid self-contamination of the median)
+    - Returns       : current_move / median_baseline
+                      e.g. 4.2 means the price moved 4.2× its typical range
+                      None if fewer than 2*spike_window + baseline_bars closes
+    """
+    n = len(closes)
+    if n < 2 * spike_window + baseline_bars:
+        return None
+
+    # Current spike_window move
+    current_price = closes[-1]
+    past_price = closes[-(spike_window + 1)]
+    if past_price <= 0:
+        return None
+    current_move = abs((current_price - past_price) / past_price * 100)
+
+    # Historical baseline: rolling spike_window % moves starting after
+    # the current window so the current spike doesn't skew the median
+    moves = []
+    for k in range(spike_window, spike_window + baseline_bars):
+        end_p   = closes[-(k + 1)]
+        start_p = closes[-(k + spike_window + 1)]
+        if start_p > 0 and end_p > 0:
+            moves.append(abs((end_p - start_p) / start_p * 100))
+
+    if not moves:
+        return None
+
+    median_move = float(np.median(moves))
+    if median_move < 0.01:   # near-zero median → market is frozen, skip
+        return None
+
+    return round(current_move / median_move, 1)
+
+
 def calc_lookback_delta(pct_moves: dict[int, float | None]) -> dict[int, float | None]:
     """
     Compute the 'acceleration' (delta) between consecutive lookback windows.
@@ -256,8 +305,9 @@ class IndicatorEngine:
         rsi = calc_rsi(closes)
         rsi_ema = calc_rsi_ema(closes)
         macd_line, macd_signal, macd_hist = calc_macd(closes)
-        pct = calc_lookback_pct(closes)
-        delta = calc_lookback_delta(pct)
+        pct         = calc_lookback_pct(closes)
+        delta       = calc_lookback_delta(pct)
+        spike_ratio = calc_spike_ratio(closes)
 
         return Indicators(
             rsi=rsi,
@@ -267,6 +317,7 @@ class IndicatorEngine:
             macd_hist=macd_hist,
             lookback_pct=pct,
             lookback_delta=delta,
+            spike_ratio=spike_ratio,
         )
 
     def bar_count(self) -> int:

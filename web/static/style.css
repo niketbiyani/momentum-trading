@@ -398,6 +398,12 @@ body {
 .rsi-ob { color: var(--red);   font-weight: 700; }
 .rsi-os { color: var(--green); font-weight: 700; }
 
+/* Spike ratio column (Spk×): how many × the current move vs 100-bar median */
+.ratio-med     { color: #f0c040; font-weight: 600; }           /* 1.5–2.5× */
+.ratio-high    { color: #ff8800; font-weight: 700; }           /* 2.5–4×   */
+.ratio-extreme { color: #ff3030; font-weight: 700;             /* 4×+      */
+                 text-shadow: 0 0 6px rgba(255,48,48,0.5); }
+
 /* Signal badge */
 .sig-badge {
   display: inline-block;

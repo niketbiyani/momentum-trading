@@ -673,6 +673,8 @@ class SpikeDetectorApp:
                         "spk10":           round(ind.lookback_pct.get(10) or 0, 2),
                         # Full lookback pct table: current vs N bars ago
                         "lb_pct":          lb_pct,
+                        # Spike ratio: current 10b move / median 10b move (100-bar baseline)
+                        "spike_ratio":     ind.spike_ratio,
                     }
 
             active_sig = state.active_signals[-1] if state.active_signals else None

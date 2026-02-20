@@ -122,6 +122,15 @@ function deltaClass(v) {
   return v > 0 ? 'up' : 'down';
 }
 
+// Spike ratio: how many times larger is the current 10b move vs the 100-bar median
+function ratioClass(v) {
+  if (v == null) return '';
+  if (v >= 4)   return 'ratio-extreme';   // 4×+ → very unusual spike
+  if (v >= 2.5) return 'ratio-high';      // 2.5–4× → notable
+  if (v >= 1.5) return 'ratio-med';       // 1.5–2.5× → slightly elevated
+  return '';
+}
+
 function sigBadge(opt) {
   if (!opt || !opt.signal_status) return '';
   const s   = opt.signal_status;
@@ -139,16 +148,21 @@ function optRowClass(ceOpt, peOpt) {
 }
 
 // ── Multi-TF cells helper ────────────────────────────────────────────────────
-// Renders RSI | MACD | Spk% | Signal cells for each TF in the list
+// Renders RSI | MACD-H | Spk% | Spk× | Sig cells for each TF in the list
 function tfCells(opt, tfList) {
   let cells = '';
   for (const tf of tfList) {
-    const ind = (opt && opt.indicators) ? (opt.indicators[tf] || {}) : {};
-    const rsi = ind.rsi       != null ? ind.rsi       : null;
-    const mh  = ind.macd_hist != null ? ind.macd_hist : null;
-    const spk = ind.spk10     != null ? ind.spk10     : null;
-    const spkStr = spk != null ? (spk >= 0 ? '+' : '') + spk.toFixed(1) + '%' : '—';
-    const spkStyle = spk != null && heatBg(spk) ? `style="background:${heatBg(spk)}"` : '';
+    const ind   = (opt && opt.indicators) ? (opt.indicators[tf] || {}) : {};
+    const rsi   = ind.rsi         != null ? ind.rsi         : null;
+    const mh    = ind.macd_hist   != null ? ind.macd_hist   : null;
+    const spk   = ind.spk10       != null ? ind.spk10       : null;
+    const ratio = ind.spike_ratio != null ? ind.spike_ratio : null;
+
+    const spkStr   = spk   != null ? (spk >= 0 ? '+' : '') + spk.toFixed(1) + '%' : '—';
+    const spkStyle = spk   != null && heatBg(spk) ? `style="background:${heatBg(spk)}"` : '';
+    const ratioStr = ratio != null ? ratio.toFixed(1) + '×' : '—';
+    const ratioTip = ratio != null ? `Spike ${ratio.toFixed(1)}× median baseline` : '';
+
     const sigObj = ind.signal_status
       ? { signal_status: ind.signal_status, signal_direction: ind.signal_direction }
       : null;
@@ -156,6 +170,7 @@ function tfCells(opt, tfList) {
       <td class="${rsiClass(rsi)}">${fmtRsi(rsi)}</td>
       <td class="${deltaClass(mh)}">${mh != null ? (mh >= 0 ? '+' : '') + fmt(mh, 3) : '—'}</td>
       <td class="${spkClass(spk)}" ${spkStyle}>${spkStr}</td>
+      <td class="${ratioClass(ratio)}" title="${ratioTip}">${ratioStr}</td>
       <td>${sigBadge(sigObj)}</td>`;
   }
   return cells;

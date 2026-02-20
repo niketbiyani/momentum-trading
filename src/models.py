@@ -45,6 +45,9 @@ class Indicators:
     lookback_pct: dict = field(default_factory=dict)
     # Delta between consecutive lookbacks (shows WHERE acceleration occurred)
     lookback_delta: dict = field(default_factory=dict)
+    # Spike ratio: current 10b move / median 10b move over last 100 bars
+    # e.g. 4.2 = current move is 4.2× the typical baseline move
+    spike_ratio: float | None = None
 
 
 @dataclass
