@@ -65,6 +65,7 @@ from config import (
 )
 from src.models import Bar, Tick, InstrumentState, OptionInfo, Signal
 from src.bar_builder import MultiInstrumentBarBuilder
+from src.bar_store import BarStore
 from src.indicators import IndicatorEngine
 from src.options_manager import OptionsManager
 from src.stock_manager import StockOptionsManager, fetch_nifty_spot
@@ -343,6 +344,7 @@ class SpikeDetectorApp:
         self._stock_manager  = StockOptionsManager()
         self._nifty_manager  = OptionsManager()
         self._bar_builder    = MultiInstrumentBarBuilder(on_bar_close=self._on_bar_close)
+        self._bar_store      = BarStore()    # persists 5s/15s bars across restarts
         self._indicator_engines: dict[tuple[str, str], IndicatorEngine] = {}
         self._signal_engine  = SignalEngine()
         self._instrument_states: dict[str, InstrumentState] = {}
@@ -461,6 +463,26 @@ class SpikeDetectorApp:
         for symbol, sec_id in eq_ids.items():
             self._eq_sec_to_symbol[sec_id] = symbol
 
+        # 8.5 Load persisted 5s/15s bars (saved from previous session).
+        #     These are bars the Dhan API can't provide (sub-minute resolution).
+        #     We load them before the 1m backfill so the bar deques are populated
+        #     and the indicator engines can be seeded with real sub-minute history.
+        self._set_status("Loading cached 5s/15s bars from previous session…")
+        pruned = self._bar_store.prune_old()
+        if pruned:
+            logger.info(f"Bar store: pruned {pruned} stale rows")
+        loaded_bars = 0
+        for sid in list(self._instrument_states.keys()):
+            for tf in ("5s", "15s"):
+                bars = self._bar_store.load_bars(sid, tf)
+                if bars:
+                    self._bar_builder.add_historical_bars(sid, tf, bars)
+                    loaded_bars += len(bars)
+        if loaded_bars:
+            logger.info(f"Bar store: loaded {loaded_bars} persisted sub-minute bars")
+        else:
+            logger.info("Bar store: no persisted bars found (fresh start)")
+
         # 9. Backfill 1m bars so RSI/MACD have real history from startup.
         #    Nifty index options are always backfilled (only 4 instruments).
         #    Stock options are gated by BACKFILL_STOCK_OPTIONS env var (100 API calls).
@@ -565,6 +587,9 @@ class SpikeDetectorApp:
         if not engine or not state:
             return
 
+        # Persist 5s/15s bars so they survive restarts (1m comes from the API)
+        self._bar_store.write_bar(security_id, timeframe, bar)
+
         engine.push_close(bar.close)
         indicators = engine.compute()
 
@@ -662,6 +687,14 @@ class SpikeDetectorApp:
                         for k, v in ind.lookback_pct.items()
                         if k <= 100
                     }
+                    # Lookback delta: move WITHIN each 10-bar window
+                    # delta[10] = move in last 10 bars
+                    # delta[20] = move in bars 11-20 (where was the spike?)
+                    lb_delta = {
+                        str(k): round(v, 2) if v is not None else None
+                        for k, v in ind.lookback_delta.items()
+                        if k <= 100
+                    }
                     indicators_by_tf[tf] = {
                         "rsi":             round(ind.rsi, 1),
                         "rsi_ema":         round(ind.rsi_ema, 1),
@@ -671,8 +704,10 @@ class SpikeDetectorApp:
                         "signal_direction":sig.direction if sig else None,
                         # 10-bar lookback % — quick single-number spike indicator
                         "spk10":           round(ind.lookback_pct.get(10) or 0, 2),
-                        # Full lookback pct table: current vs N bars ago
+                        # Cumulative % move: current price vs N bars ago
                         "lb_pct":          lb_pct,
+                        # Delta % move: move WITHIN each 10-bar window (for pinpointing spike)
+                        "lb_delta":        lb_delta,
                         # Spike ratio: current 10b move / median 10b move (100-bar baseline)
                         "spike_ratio":     ind.spike_ratio,
                     }

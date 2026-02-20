@@ -9,6 +9,7 @@ let state = {
 let activeTf  = '1m';
 let activeTab = 'nifty';   // 'nifty' | 'stocks'
 let lbTf      = '1m';      // timeframe used for lookback heatmap
+let lbMode    = 'pct';    // 'pct' = cumulative % vs N bars ago | 'delta' = move within each window
 let searchQuery = '';
 let reconnectDelay = 1000;
 
@@ -147,21 +148,39 @@ function optRowClass(ceOpt, peOpt) {
   return '';
 }
 
+// Minimum bars for spike_ratio to be available (2 × spike_window + baseline_bars)
+const SPIKE_RATIO_MIN_BARS = 120;
+
 // ── Multi-TF cells helper ────────────────────────────────────────────────────
 // Renders RSI | MACD-H | Spk% | Spk× | Sig cells for each TF in the list
 function tfCells(opt, tfList) {
   let cells = '';
   for (const tf of tfList) {
-    const ind   = (opt && opt.indicators) ? (opt.indicators[tf] || {}) : {};
-    const rsi   = ind.rsi         != null ? ind.rsi         : null;
-    const mh    = ind.macd_hist   != null ? ind.macd_hist   : null;
-    const spk   = ind.spk10       != null ? ind.spk10       : null;
-    const ratio = ind.spike_ratio != null ? ind.spike_ratio : null;
+    const ind    = (opt && opt.indicators) ? (opt.indicators[tf] || {}) : {};
+    const rsi    = ind.rsi         != null ? ind.rsi         : null;
+    const mh     = ind.macd_hist   != null ? ind.macd_hist   : null;
+    const spk    = ind.spk10       != null ? ind.spk10       : null;
+    const ratio  = ind.spike_ratio != null ? ind.spike_ratio : null;
+    const nBars  = ind.bars        != null ? ind.bars        : 0;
 
-    const spkStr   = spk   != null ? (spk >= 0 ? '+' : '') + spk.toFixed(1) + '%' : '—';
-    const spkStyle = spk   != null && heatBg(spk) ? `style="background:${heatBg(spk)}"` : '';
-    const ratioStr = ratio != null ? ratio.toFixed(1) + '×' : '—';
-    const ratioTip = ratio != null ? `Spike ${ratio.toFixed(1)}× median baseline` : '';
+    const spkStr   = spk != null ? (spk >= 0 ? '+' : '') + spk.toFixed(1) + '%' : '—';
+    const spkStyle = spk != null && heatBg(spk) ? `style="background:${heatBg(spk)}"` : '';
+
+    // Spk×: show ratio if available, bar-count progress if building up, or — if quiet
+    let ratioStr, ratioTip, ratioCls;
+    if (ratio != null) {
+      ratioStr = ratio.toFixed(1) + '×';
+      ratioTip = `${ratio.toFixed(1)}× median baseline (${nBars} bars)`;
+      ratioCls = ratioClass(ratio);
+    } else if (nBars < SPIKE_RATIO_MIN_BARS) {
+      ratioStr = `${nBars}/${SPIKE_RATIO_MIN_BARS}`;
+      ratioTip = `Building history — need ${SPIKE_RATIO_MIN_BARS} bars, have ${nBars}`;
+      ratioCls = 'ratio-building';
+    } else {
+      ratioStr = '—';
+      ratioTip = 'Market too quiet (near-zero baseline)';
+      ratioCls = '';
+    }
 
     const sigObj = ind.signal_status
       ? { signal_status: ind.signal_status, signal_direction: ind.signal_direction }
@@ -170,7 +189,7 @@ function tfCells(opt, tfList) {
       <td class="${rsiClass(rsi)}">${fmtRsi(rsi)}</td>
       <td class="${deltaClass(mh)}">${mh != null ? (mh >= 0 ? '+' : '') + fmt(mh, 3) : '—'}</td>
       <td class="${spkClass(spk)}" ${spkStyle}>${spkStr}</td>
-      <td class="${ratioClass(ratio)}" title="${ratioTip}">${ratioStr}</td>
+      <td class="${ratioCls}" title="${ratioTip}">${ratioStr}</td>
       <td>${sigBadge(sigObj)}</td>`;
   }
   return cells;
@@ -382,6 +401,15 @@ function renderLookbackHeatmap() {
   const nifty = state.nifty || {};
   const opts  = nifty.options || {};
 
+  // Update column header hints based on current mode
+  const isDelta = (lbMode === 'delta');
+  document.querySelectorAll('#lookback-table thead th[data-lb-period]').forEach(th => {
+    const p = th.dataset.lbPeriod;
+    th.title = isDelta
+      ? `Move within bars ${Number(p)-9}–${p} ago (delta window)`
+      : `Current price vs ${p} bars ago (cumulative)`;
+  });
+
   const ORDER = [
     { key: 'ATM_CE', label: 'ATM CE', cls: 'opt-ce' },
     { key: 'ITM_CE', label: 'ITM CE', cls: 'opt-ce' },
@@ -390,18 +418,20 @@ function renderLookbackHeatmap() {
   ];
 
   const rows = ORDER.map(({ key, label, cls }) => {
-    const opt = opts[key];
-    const ind = (opt && opt.indicators && opt.indicators[lbTf]) || {};
-    const lp  = ind.lb_pct || {};
+    const opt  = opts[key];
+    const ind  = (opt && opt.indicators && opt.indicators[lbTf]) || {};
+    const data = isDelta ? (ind.lb_delta || {}) : (ind.lb_pct || {});
 
     const cells = LB_PERIODS.map(p => {
-      const v = lp[String(p)];
+      const v = data[String(p)];
       if (v == null) return `<td class="hc-empty">—</td>`;
       const bg      = heatBg(v);
       const valCls  = v > 0 ? 'hc-pos' : v < 0 ? 'hc-neg' : 'hc-neu';
       const bgStyle = bg ? `background:${bg};` : '';
       const sign    = v > 0 ? '+' : '';
-      const tip     = `vs ${p} bars ago: ${sign}${v.toFixed(2)}%`;
+      const tip     = isDelta
+        ? `Bars ${Number(p)-9}–${p} ago: ${sign}${v.toFixed(2)}%`
+        : `vs ${p} bars ago: ${sign}${v.toFixed(2)}%`;
       return `<td class="${valCls}" style="${bgStyle}" title="${tip}">${sign}${v.toFixed(1)}%</td>`;
     }).join('');
 
@@ -423,6 +453,28 @@ document.querySelectorAll('.lb-tf-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     lbTf = btn.dataset.lbtf;
     updateLbTfButtons();
+    renderLookbackHeatmap();
+  });
+});
+
+// ── Lookback mode buttons (pct vs delta) ─────────────────────────────────────
+function updateLbModeButtons() {
+  document.querySelectorAll('.lb-mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.lbmode === lbMode);
+  });
+  // Update section description text
+  const desc = document.getElementById('lb-mode-desc');
+  if (desc) {
+    desc.textContent = lbMode === 'delta'
+      ? 'Each cell = move within that 10-bar window — shows WHERE the spike happened'
+      : 'Each cell = cumulative % move since N bars ago — shows total magnitude';
+  }
+}
+
+document.querySelectorAll('.lb-mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    lbMode = btn.dataset.lbmode;
+    updateLbModeButtons();
     renderLookbackHeatmap();
   });
 });

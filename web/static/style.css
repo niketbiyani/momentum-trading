@@ -501,3 +501,51 @@ tr.has-signal-ENTRY td  { background: rgba(63,185,80,0.07);  }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ── Spk× building state (not enough bars yet) ───────────────────────────── */
+/* Shows e.g. "45/120" while the bar history is accumulating */
+.ratio-building { color: var(--muted); font-size: 10px; letter-spacing: -0.02em; }
+
+/* ── Lookback heatmap mode toggle ────────────────────────────────────────── */
+.lb-mode-group  { display: inline-flex; gap: 4px; margin-left: 8px; }
+.lb-mode-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  padding: 2px 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  transition: all 0.15s;
+}
+.lb-mode-btn:hover  { border-color: var(--orange); color: var(--orange); }
+.lb-mode-btn.active { background: var(--orange); border-color: var(--orange); color: #0d1117; font-weight: 700; }
+
+/* Small description line below heatmap header */
+.lb-mode-desc {
+  font-size: 10px;
+  color: var(--muted);
+  padding: 2px 12px 6px;
+  font-style: italic;
+}
+
+/* ── Strategy legend ─────────────────────────────────────────────────────── */
+#strategy-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+}
+.leg-title  { color: var(--muted); font-weight: 700; text-transform: uppercase;
+              letter-spacing: 0.06em; font-size: 10px; margin-right: 4px; }
+.leg-step   { display: flex; align-items: center; gap: 6px; }
+.leg-badge  { padding: 1px 7px; border-radius: 3px; font-size: 11px; font-weight: 700; }
+.leg-desc   { color: var(--muted); font-size: 10px; }
+.leg-arrow  { color: var(--border); font-size: 14px; }
+.leg-hint   { color: var(--muted); font-size: 10px; margin-left: auto;
+              border-left: 1px solid var(--border); padding-left: 10px; }

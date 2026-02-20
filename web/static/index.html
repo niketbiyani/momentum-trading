@@ -72,41 +72,65 @@
     </table>
   </div>
 
-  <!-- Lookback delta heatmap -->
+  <!-- Lookback heatmap -->
   <div id="lookback-section">
     <div class="section-hdr">
-      Lookback: % move vs N bars ago — large cell = big move since then
+      Lookback heatmap
       <span class="lb-tf-group">
         <button class="lb-tf-btn" data-lbtf="5s">5s</button>
         <button class="lb-tf-btn" data-lbtf="15s">15s</button>
         <button class="lb-tf-btn active" data-lbtf="1m">1m</button>
       </span>
+      <span class="lb-mode-group">
+        <button class="lb-mode-btn active" data-lbmode="pct" title="Cumulative % vs N bars ago">Cumul %</button>
+        <button class="lb-mode-btn" data-lbmode="delta" title="Move within each 10-bar window — pinpoints WHERE the spike happened">Δ/Window</button>
+      </span>
       <span class="lb-legend">
         <span class="legend-ce">■ CE</span>
         <span class="legend-pe">■ PE</span>
-        &nbsp; e.g. "40b" = (current price − price 40 bars ago) / price 40 bars ago
       </span>
     </div>
+    <div id="lb-mode-desc" class="lb-mode-desc">Each cell = cumulative % move since N bars ago — shows total magnitude</div>
     <table id="lookback-table">
       <thead>
         <tr>
           <th class="th-left">Option</th>
-          <th title="current vs 10 bars ago">10b</th>
-          <th title="current vs 20 bars ago">20b</th>
-          <th title="current vs 30 bars ago">30b</th>
-          <th title="current vs 40 bars ago">40b</th>
-          <th title="current vs 50 bars ago">50b</th>
-          <th title="current vs 60 bars ago">60b</th>
-          <th title="current vs 70 bars ago">70b</th>
-          <th title="current vs 80 bars ago">80b</th>
-          <th title="current vs 90 bars ago">90b</th>
-          <th title="current vs 100 bars ago">100b</th>
+          <th data-lb-period="10">10b</th>
+          <th data-lb-period="20">20b</th>
+          <th data-lb-period="30">30b</th>
+          <th data-lb-period="40">40b</th>
+          <th data-lb-period="50">50b</th>
+          <th data-lb-period="60">60b</th>
+          <th data-lb-period="70">70b</th>
+          <th data-lb-period="80">80b</th>
+          <th data-lb-period="90">90b</th>
+          <th data-lb-period="100">100b</th>
         </tr>
       </thead>
       <tbody id="lookback-body">
         <tr><td colspan="11" class="empty-msg">Waiting for data…</td></tr>
       </tbody>
     </table>
+  </div>
+
+  <!-- Strategy flow legend -->
+  <div id="strategy-legend">
+    <span class="leg-title">Strategy flow →</span>
+    <span class="leg-step">
+      <span class="leg-badge sig-SPIKE">① SPIKE</span>
+      <span class="leg-desc">10-bar Spk% crosses threshold in any window</span>
+    </span>
+    <span class="leg-arrow">→</span>
+    <span class="leg-step">
+      <span class="leg-badge sig-WATCH">② WATCH</span>
+      <span class="leg-desc">RSI + MACD-H confirm direction</span>
+    </span>
+    <span class="leg-arrow">→</span>
+    <span class="leg-step">
+      <span class="leg-badge sig-ENTRY">③ ENTRY</span>
+      <span class="leg-desc">Price breaks above spike high (CE) or below spike low (PE)</span>
+    </span>
+    <span class="leg-hint">Spk× = current 10b move ÷ 100-bar median baseline — anything ≥ 2.5× is notable</span>
   </div>
 
   <!-- Nifty signals panel -->
