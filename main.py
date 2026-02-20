@@ -353,6 +353,7 @@ class SpikeDetectorApp:
         self._signal_engine  = SignalEngine()
         self._instrument_states: dict[str, InstrumentState] = {}
         self._signals: deque[Signal] = deque(maxlen=100)
+        self._tick_history: dict[str, deque] = {}   # sid -> deque of [ts_ms, ltp]
         self._running = False
 
         # Security ID maps
@@ -641,6 +642,12 @@ class SpikeDetectorApp:
                         state.prev_ltp = state.ltp
                         state.ltp = tick.ltp
                         state.last_update = tick.timestamp
+                    # Accumulate raw ticks for the frontend price chart (last 300 ticks)
+                    if tick.security_id not in self._tick_history:
+                        self._tick_history[tick.security_id] = deque(maxlen=300)
+                    self._tick_history[tick.security_id].append(
+                        [int(tick.timestamp.timestamp() * 1000), round(tick.ltp, 2)]
+                    )
                     self._bar_builder.on_tick(tick)
 
                     for tf in TIMEFRAMES:
@@ -740,6 +747,7 @@ class SpikeDetectorApp:
                 "ltp":              state.ltp,
                 "ltp_change_pct":   round(state.ltp_change_pct or 0, 2),
                 "indicators":       indicators_by_tf,
+                "ticks":            list(self._tick_history.get(sid, [])),
                 # Flat 1m values for backwards compatibility
                 "rsi":       round((state.indicators.get("1m") or _empty_ind()).rsi, 1),
                 "macd_hist": round((state.indicators.get("1m") or _empty_ind()).macd_hist, 4),

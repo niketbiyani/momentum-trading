@@ -72,6 +72,21 @@
     </table>
   </div>
 
+  <!-- Tick price charts -->
+  <div id="tick-charts-section">
+    <div class="section-hdr">Live Price Chart <span class="tick-chart-hint">(raw ticks)</span></div>
+    <div id="tick-charts-grid">
+      <div class="tick-chart-panel">
+        <div class="tick-chart-label opt-ce">ATM CE</div>
+        <div id="chart-ATM_CE" class="tick-chart-canvas"></div>
+      </div>
+      <div class="tick-chart-panel">
+        <div class="tick-chart-label opt-pe">ATM PE</div>
+        <div id="chart-ATM_PE" class="tick-chart-canvas"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Lookback heatmap -->
   <div id="lookback-section">
     <div class="section-hdr">
@@ -188,6 +203,7 @@
 
 </div>
 
-<script src="/static/app.js?v=20260220b"></script>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script src="/static/app.js?v=20260220c"></script>
 </body>
 </html>
