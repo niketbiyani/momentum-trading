@@ -35,6 +35,8 @@ from typing import Optional
 
 from config import (
     SPIKE_THRESHOLD_PCT,
+    RSI_OVERBOUGHT,
+    RSI_OVERSOLD,
     RSI_UP_MIN,
     RSI_DOWN_MAX,
     LOOKBACK_PERIODS,
@@ -200,6 +202,16 @@ class SpikeDetector:
 
         if abs(best_pct) >= _THRESH:
             direction = "UP" if best_pct > 0 else "DOWN"
+            # Require RSI to have hit overbought/oversold WITHIN the spike window.
+            # This confirms the price move was driven by real momentum, not a quiet grind.
+            if direction == "UP":
+                rsi_peak = indicators.rsi_max_by_window.get(best_window)
+                if rsi_peak is None or rsi_peak < RSI_OVERBOUGHT:
+                    return None
+            else:
+                rsi_trough = indicators.rsi_min_by_window.get(best_window)
+                if rsi_trough is None or rsi_trough > RSI_OVERSOLD:
+                    return None
             return direction, abs(best_pct), best_window
 
         return None

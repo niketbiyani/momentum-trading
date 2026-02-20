@@ -45,9 +45,13 @@ class Indicators:
     lookback_pct: dict = field(default_factory=dict)
     # Delta between consecutive lookbacks (shows WHERE acceleration occurred)
     lookback_delta: dict = field(default_factory=dict)
-    # Spike ratio: current 10b move / median 10b move over last 100 bars
-    # e.g. 4.2 = current move is 4.2× the typical baseline move
-    spike_ratio: float | None = None
+    # RSI peak within last N bars — used to confirm overbought crossing in spike window
+    rsi_max_by_window: dict = field(default_factory=dict)   # {10: 78.2, 20: 80.1, ...}
+    # RSI trough within last N bars — used to confirm oversold crossing in spike window
+    rsi_min_by_window: dict = field(default_factory=dict)   # {10: 22.5, 20: 19.8, ...}
+    # Z-score: (current 10b move - mean baseline) / std baseline
+    # e.g. 3.2 = current move is 3.2σ above the historical mean — a genuine outlier
+    spike_zscore: float | None = None
 
 
 @dataclass

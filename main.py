@@ -712,8 +712,8 @@ class SpikeDetectorApp:
                         "lb_pct":          lb_pct,
                         # Delta % move: move WITHIN each 10-bar window (for pinpointing spike)
                         "lb_delta":        lb_delta,
-                        # Spike ratio: current 10b move / median 10b move (100-bar baseline)
-                        "spike_ratio":     ind.spike_ratio,
+                        # Z-score: (current 10b move - mean baseline) / std baseline
+                        "spike_zscore":    ind.spike_zscore,
                     }
 
             active_sig = state.active_signals[-1] if state.active_signals else None

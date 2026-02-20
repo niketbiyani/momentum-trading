@@ -122,12 +122,12 @@ function deltaClass(v) {
   return v > 0 ? 'up' : 'down';
 }
 
-// Spike ratio: how many times larger is the current 10b move vs the 100-bar median
-function ratioClass(v) {
+// Z-score colour class: standard deviations above the 100-bar mean
+function zscoreClass(v) {
   if (v == null) return '';
-  if (v >= 4)   return 'ratio-extreme';   // 4×+ → very unusual spike
-  if (v >= 2.5) return 'ratio-high';      // 2.5–4× → notable
-  if (v >= 1.5) return 'ratio-med';       // 1.5–2.5× → slightly elevated
+  if (v >= 3.0) return 'ratio-extreme';   // ≥3σ → very unusual (p<0.3%)
+  if (v >= 2.0) return 'ratio-high';      // 2–3σ → notable (p<5%)
+  if (v >= 1.5) return 'ratio-med';       // 1.5–2σ → slightly elevated
   return '';
 }
 
@@ -147,38 +147,38 @@ function optRowClass(ceOpt, peOpt) {
   return '';
 }
 
-// Minimum bars for spike_ratio to be available (2 × spike_window + baseline_bars)
-const SPIKE_RATIO_MIN_BARS = 120;
+// Minimum bars for spike_zscore to be available (2 × spike_window + baseline_bars)
+const SPIKE_ZSCORE_MIN_BARS = 120;
 
 // ── Multi-TF cells helper ────────────────────────────────────────────────────
-// Renders RSI | MACD-H | Spk% | Spk× | Sig cells for each TF in the list
+// Renders RSI | MACD-H | Spk% | Spkσ | Sig cells for each TF in the list
 function tfCells(opt, tfList) {
   let cells = '';
   for (const tf of tfList) {
-    const ind    = (opt && opt.indicators) ? (opt.indicators[tf] || {}) : {};
-    const rsi    = ind.rsi         != null ? ind.rsi         : null;
-    const mh     = ind.macd_hist   != null ? ind.macd_hist   : null;
-    const spk    = ind.spk10       != null ? ind.spk10       : null;
-    const ratio  = ind.spike_ratio != null ? ind.spike_ratio : null;
-    const nBars  = ind.bars        != null ? ind.bars        : 0;
+    const ind     = (opt && opt.indicators) ? (opt.indicators[tf] || {}) : {};
+    const rsi     = ind.rsi          != null ? ind.rsi          : null;
+    const mh      = ind.macd_hist    != null ? ind.macd_hist    : null;
+    const spk     = ind.spk10        != null ? ind.spk10        : null;
+    const zscore  = ind.spike_zscore != null ? ind.spike_zscore : null;
+    const nBars   = ind.bars         != null ? ind.bars         : 0;
 
     const spkStr   = spk != null ? (spk >= 0 ? '+' : '') + spk.toFixed(1) + '%' : '—';
     const spkStyle = spk != null && heatBg(spk) ? `style="background:${heatBg(spk)}"` : '';
 
-    // Spk×: show ratio if available, bar-count progress if building up, or — if quiet
-    let ratioStr, ratioTip, ratioCls;
-    if (ratio != null) {
-      ratioStr = ratio.toFixed(1) + '×';
-      ratioTip = `${ratio.toFixed(1)}× median baseline (${nBars} bars)`;
-      ratioCls = ratioClass(ratio);
-    } else if (nBars < SPIKE_RATIO_MIN_BARS) {
-      ratioStr = `${nBars}/${SPIKE_RATIO_MIN_BARS}`;
-      ratioTip = `Building history — need ${SPIKE_RATIO_MIN_BARS} bars, have ${nBars}`;
-      ratioCls = 'ratio-building';
+    // Spkσ: show z-score if available, bar-count progress if building up, or — if quiet
+    let zStr, zTip, zCls;
+    if (zscore != null) {
+      zStr = zscore.toFixed(1) + 'σ';
+      zTip = `${zscore.toFixed(1)}σ above 100-bar mean (${nBars} bars)`;
+      zCls = zscoreClass(zscore);
+    } else if (nBars < SPIKE_ZSCORE_MIN_BARS) {
+      zStr = `${nBars}/${SPIKE_ZSCORE_MIN_BARS}`;
+      zTip = `Building history — need ${SPIKE_ZSCORE_MIN_BARS} bars, have ${nBars}`;
+      zCls = 'ratio-building';
     } else {
-      ratioStr = '—';
-      ratioTip = 'Market too quiet (near-zero baseline)';
-      ratioCls = '';
+      zStr = '—';
+      zTip = 'Market too quiet (near-zero std)';
+      zCls = '';
     }
 
     const sigObj = ind.signal_status
@@ -188,7 +188,7 @@ function tfCells(opt, tfList) {
       <td class="${rsiClass(rsi)}">${fmtRsi(rsi)}</td>
       <td class="${deltaClass(mh)}">${mh != null ? (mh >= 0 ? '+' : '') + fmt(mh, 3) : '—'}</td>
       <td class="${spkClass(spk)}" ${spkStyle}>${spkStr}</td>
-      <td class="${ratioCls}" title="${ratioTip}">${ratioStr}</td>
+      <td class="${zCls}" title="${zTip}">${zStr}</td>
       <td>${sigBadge(sigObj)}</td>`;
   }
   return cells;

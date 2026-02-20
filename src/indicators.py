@@ -125,11 +125,47 @@ def calc_rsi_ema(closes: list[float], rsi_period: int = RSI_PERIOD, ema_period: 
     This is the 'RSI with EMA-50' the user refers to.
     """
     rsi_series = calc_rsi_series(closes, rsi_period)
+    return _rsi_ema_from_series(rsi_series, rsi_period, ema_period)
+
+
+def _rsi_ema_from_series(rsi_series: list[float], rsi_period: int = RSI_PERIOD,
+                         ema_period: int = RSI_EMA_PERIOD) -> float:
+    """Compute EMA from a pre-computed RSI series (avoids recomputing the series)."""
     # Remove the seed 50.0 values from the start (only use real RSI values)
     real_rsi = [v for v in rsi_series if v != 50.0 or len(rsi_series) <= rsi_period + 1]
     if len(real_rsi) == 0:
         return 50.0
     return round(_ema(np.array(real_rsi), ema_period), 2)
+
+
+def calc_rsi_extremes_by_window(rsi_series: list[float], windows: list[int]) -> tuple[dict, dict]:
+    """
+    For each lookback window N, find the max and min RSI value in the last N bars.
+
+    Used to confirm that RSI reached overbought (≥70) or oversold (≤30) WITHIN
+    the spike window — ensuring the price move was accompanied by real momentum,
+    not a quiet grind.
+
+    Args:
+        rsi_series: output of calc_rsi_series(), aligned with close prices
+        windows:    list of lookback bar counts, e.g. [10, 20, 30, 40, 50]
+
+    Returns:
+        (max_by_window, min_by_window) — dicts keyed by window size
+        Values are None where the series is too short.
+    """
+    max_by: dict[int, float | None] = {}
+    min_by: dict[int, float | None] = {}
+    n = len(rsi_series)
+    for w in windows:
+        if n >= w:
+            window_vals = rsi_series[-w:]
+            max_by[w] = round(max(window_vals), 1)
+            min_by[w] = round(min(window_vals), 1)
+        else:
+            max_by[w] = None
+            min_by[w] = None
+    return max_by, min_by
 
 
 def calc_macd(closes: list[float]) -> tuple[float, float, float]:
@@ -195,38 +231,38 @@ def calc_lookback_pct(closes: list[float]) -> dict[int, float | None]:
     return result
 
 
-def calc_spike_ratio(closes: list[float],
-                     spike_window: int = 10,
-                     baseline_bars: int = 100) -> float | None:
+def calc_spike_zscore(closes: list[float],
+                      spike_window: int = 10,
+                      baseline_bars: int = 100) -> float | None:
     """
-    Compares the current spike_window % move to the historical median.
+    Z-score of the current spike_window % move vs its historical distribution.
 
-    Strategy context: a 10% move is only meaningful if the typical move
-    over the last 100 bars is 2-3%. This ratio tells you how many times
-    larger the current move is vs the baseline "normal" move.
+    z = (current_move - mean_baseline) / std_baseline
+
+    A z-score of +2 means the current move is 2 standard deviations above the
+    historical mean — a genuine statistical outlier. This is more informative
+    than a simple ratio because it accounts for how *spread out* the baseline
+    moves are (high-vol vs low-vol instruments are auto-normalised).
 
     - Current move  : |% change over last spike_window bars|
-    - Baseline      : median of |spike_window % moves| for each of the
-                      baseline_bars positions *before* the current window
-                      (rolling, 1 sample per bar — excludes current spike
-                      to avoid self-contamination of the median)
-    - Returns       : current_move / median_baseline
-                      e.g. 4.2 means the price moved 4.2× its typical range
-                      None if fewer than 2*spike_window + baseline_bars closes
+    - Baseline      : rolling spike_window % moves for the baseline_bars
+                      positions *before* the current window (1 sample per bar)
+    - Returns       : z-score (e.g. 3.1 = 3.1σ above baseline mean)
+                      None if not enough data or std ≈ 0 (frozen market)
+
+    Display use only — not used as a gate for signal generation.
     """
     n = len(closes)
     if n < 2 * spike_window + baseline_bars:
         return None
 
-    # Current spike_window move
     current_price = closes[-1]
     past_price = closes[-(spike_window + 1)]
     if past_price <= 0:
         return None
     current_move = abs((current_price - past_price) / past_price * 100)
 
-    # Historical baseline: rolling spike_window % moves starting after
-    # the current window so the current spike doesn't skew the median
+    # Historical baseline: rolling spike_window % moves, excluding the current window
     moves = []
     for k in range(spike_window, spike_window + baseline_bars):
         end_p   = closes[-(k + 1)]
@@ -234,14 +270,15 @@ def calc_spike_ratio(closes: list[float],
         if start_p > 0 and end_p > 0:
             moves.append(abs((end_p - start_p) / start_p * 100))
 
-    if not moves:
+    if len(moves) < 10:
         return None
 
-    median_move = float(np.median(moves))
-    if median_move < 0.01:   # near-zero median → market is frozen, skip
+    std_move = float(np.std(moves))
+    if std_move < 0.01:      # frozen market → no meaningful distribution
         return None
 
-    return round(current_move / median_move, 1)
+    mean_move = float(np.mean(moves))
+    return round((current_move - mean_move) / std_move, 1)
 
 
 def calc_lookback_delta(pct_moves: dict[int, float | None]) -> dict[int, float | None]:
@@ -302,12 +339,17 @@ class IndicatorEngine:
         if not closes:
             return Indicators()
 
-        rsi = calc_rsi(closes)
-        rsi_ema = calc_rsi_ema(closes)
+        # Compute RSI series once; reuse for scalar, EMA, and window extremes
+        rsi_series = calc_rsi_series(closes)
+        rsi        = rsi_series[-1] if rsi_series else 50.0
+        rsi_ema    = _rsi_ema_from_series(rsi_series)
+        spike_windows = LOOKBACK_PERIODS[:5]   # [10, 20, 30, 40, 50]
+        rsi_max_by_window, rsi_min_by_window = calc_rsi_extremes_by_window(rsi_series, spike_windows)
+
         macd_line, macd_signal, macd_hist = calc_macd(closes)
-        pct         = calc_lookback_pct(closes)
-        delta       = calc_lookback_delta(pct)
-        spike_ratio = calc_spike_ratio(closes)
+        pct          = calc_lookback_pct(closes)
+        delta        = calc_lookback_delta(pct)
+        spike_zscore = calc_spike_zscore(closes)
 
         return Indicators(
             rsi=rsi,
@@ -317,7 +359,9 @@ class IndicatorEngine:
             macd_hist=macd_hist,
             lookback_pct=pct,
             lookback_delta=delta,
-            spike_ratio=spike_ratio,
+            rsi_max_by_window=rsi_max_by_window,
+            rsi_min_by_window=rsi_min_by_window,
+            spike_zscore=spike_zscore,
         )
 
     def bar_count(self) -> int:

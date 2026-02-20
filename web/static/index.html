@@ -59,9 +59,9 @@
           <th colspan="5" class="tf-group-hdr">── 1m ──</th>
         </tr>
         <tr>
-          <th>RSI</th><th>MACD-H</th><th title="10-bar % move vs 10 bars ago">Spk%</th><th title="Current 10b move ÷ median 10b move (100-bar baseline)">Spk×</th><th>Sig</th>
-          <th>RSI</th><th>MACD-H</th><th title="10-bar % move vs 10 bars ago">Spk%</th><th title="Current 10b move ÷ median 10b move (100-bar baseline)">Spk×</th><th>Sig</th>
-          <th>RSI</th><th>MACD-H</th><th title="10-bar % move vs 10 bars ago">Spk%</th><th title="Current 10b move ÷ median 10b move (100-bar baseline)">Spk×</th><th>Sig</th>
+          <th>RSI</th><th>MACD-H</th><th title="10-bar % move vs 10 bars ago">Spk%</th><th title="Z-score: (current 10b move − mean baseline) ÷ std baseline">Spkσ</th><th>Sig</th>
+          <th>RSI</th><th>MACD-H</th><th title="10-bar % move vs 10 bars ago">Spk%</th><th title="Z-score: (current 10b move − mean baseline) ÷ std baseline">Spkσ</th><th>Sig</th>
+          <th>RSI</th><th>MACD-H</th><th title="10-bar % move vs 10 bars ago">Spk%</th><th title="Z-score: (current 10b move − mean baseline) ÷ std baseline">Spkσ</th><th>Sig</th>
         </tr>
       </thead>
       <tbody id="nifty-body">
@@ -113,19 +113,19 @@
     <span class="leg-title">Strategy flow →</span>
     <span class="leg-step">
       <span class="leg-badge sig-SPIKE">① SPIKE</span>
-      <span class="leg-desc">10-bar Spk% crosses threshold in any window</span>
+      <span class="leg-desc">Spk% ≥5% in any window AND RSI hit 70/30 during the move</span>
     </span>
     <span class="leg-arrow">→</span>
     <span class="leg-step">
       <span class="leg-badge sig-WATCH">② WATCH</span>
-      <span class="leg-desc">RSI + MACD-H confirm direction</span>
+      <span class="leg-desc">Current RSI ≥45 (UP) / ≤55 (DOWN) AND MACD confirms</span>
     </span>
     <span class="leg-arrow">→</span>
     <span class="leg-step">
       <span class="leg-badge sig-ENTRY">③ ENTRY</span>
       <span class="leg-desc">Price breaks above spike high (CE) or below spike low (PE)</span>
     </span>
-    <span class="leg-hint">Spk× = current 10b move ÷ 100-bar median baseline — anything ≥ 2.5× is notable</span>
+    <span class="leg-hint">Spkσ = z-score vs 100-bar baseline — ≥2σ notable, ≥3σ extreme (display only, not a signal gate)</span>
   </div>
 
   <!-- Nifty signals panel -->
