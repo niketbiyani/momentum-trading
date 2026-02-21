@@ -332,8 +332,71 @@ def main() -> None:
 
     # ── Replay ────────────────────────────────────────────────────────────────
     last_push = time.time()
+    i = 0
 
-    for i, (ts, o, h, l, c, vol) in enumerate(rows, 1):
+    while i < total:
+        # ── Back step: reset pipeline and silently replay up to target ────────
+        ctrl   = get_sim_control()
+        back_n = ctrl["back"]
+        if back_n > 0 and i > 0:
+            ctrl["back"] = 0          # consume
+            target = max(0, i - back_n)
+
+            # Reset all pipeline state (closure will pick up new objects by name)
+            state         = InstrumentState(info=info)
+            tf_signals    = {}
+            all_signals   = deque(maxlen=100)
+            indicator_engines = {
+                (SIM_ID, tf): IndicatorEngine()
+                for tf in TIMEFRAMES
+            }
+            signal_engine = SignalEngine()
+            for tf in TIMEFRAMES:
+                signal_engine.register(info, tf)
+            bar_builder = MultiInstrumentBarBuilder(on_bar_close=_on_bar_close)
+            bar_builder.register(SIM_ID)
+
+            # Silently replay rows 0..target-1
+            for j in range(target):
+                ts_j, o_j, h_j, l_j, c_j, vol_j = rows[j]
+                tick_j = Tick(timestamp=ts_j, security_id=SIM_ID, ltp=c_j, volume=vol_j)
+                state.prev_ltp    = state.ltp
+                state.ltp         = c_j
+                state.last_update = ts_j
+                bar_builder.on_tick(tick_j)
+                for tf in TIMEFRAMES:
+                    closes = bar_builder.get_closes(SIM_ID, tf, include_current=False)
+                    if closes:
+                        eng = indicator_engines[(SIM_ID, tf)]
+                        eng.load_closes(closes)
+                        state.indicators[tf] = eng.compute()
+            i = target
+
+            # Push the rewound state immediately then stay paused
+            sim_ts_back = rows[i - 1][0] if i > 0 else rows[0][0]
+            web_state = _build_web_state(
+                state, tf_signals, all_signals, bar_builder, i, total, sim_ts_back,
+            )
+            web_state["sim_paused"] = True
+            web_state["sim_speed"]  = ctrl["speed"]
+            web_state["sim_idx"]    = i
+            web_state["sim_total"]  = total
+            web_state["sim_ts"]     = sim_ts_back.strftime("%H:%M:%S")
+            update_state(web_state)
+            last_push = time.time()
+
+            # Block until unpaused, stepped forward, or another back request
+            while True:
+                ctrl = get_sim_control()
+                if not ctrl["paused"] or ctrl["step"] > 0 or ctrl["back"] > 0:
+                    break
+                time.sleep(0.05)
+            continue
+
+        # ── Normal tick processing ────────────────────────────────────────────
+        ts, o, h, l, c, vol = rows[i]
+        i += 1
+
         tick = Tick(timestamp=ts, security_id=SIM_ID, ltp=c, volume=vol)
 
         state.prev_ltp    = state.ltp
@@ -372,7 +435,7 @@ def main() -> None:
             if ctrl["step"] > 0:
                 ctrl["step"] -= 1   # consume one step token, advance immediately
             else:
-                # Block until the browser unpauses or sends a step
+                # Block until the browser unpauses, steps forward, or steps back
                 while True:
                     ctrl = get_sim_control()
                     if not ctrl["paused"]:
@@ -380,6 +443,8 @@ def main() -> None:
                     if ctrl["step"] > 0:
                         ctrl["step"] -= 1
                         break
+                    if ctrl["back"] > 0:
+                        break   # handled at the top of the outer loop
                     time.sleep(0.05)
         else:
             speed = ctrl["speed"]

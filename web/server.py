@@ -42,6 +42,7 @@ _sim_control: dict = {
     "paused": False,
     "speed":  1.0,   # playback speed multiplier (0 = max)
     "step":   0,     # pending single-step requests (decremented by simulate.py)
+    "back":   0,     # pending back-step requests (decremented by simulate.py)
 }
 
 # Set of active WebSocket connections (accessed only from the asyncio event loop)
@@ -99,6 +100,10 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if "sim_step" in msg:
                     _sim_control["step"] = max(
                         0, _sim_control["step"] + int(msg.get("sim_step", 0))
+                    )
+                if "sim_back" in msg:
+                    _sim_control["back"] = max(
+                        0, _sim_control["back"] + int(msg.get("sim_back", 0))
                     )
             except Exception:
                 pass

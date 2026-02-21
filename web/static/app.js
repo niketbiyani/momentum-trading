@@ -467,6 +467,7 @@ function renderSimControls() {
   ppBtn.classList.toggle('paused', paused);
 
   document.getElementById('sim-step').disabled = !paused;
+  document.getElementById('sim-back').disabled = !paused || (state.sim_idx || 0) === 0;
 
   // Sync speed dropdown to server value only when user isn't actively changing it
   const sel = document.getElementById('sim-speed-select');
@@ -487,6 +488,10 @@ function renderSimControls() {
 
 document.getElementById('sim-playpause').addEventListener('click', () => {
   sendSim({ sim_pause: !state.sim_paused });
+});
+
+document.getElementById('sim-back').addEventListener('click', () => {
+  sendSim({ sim_back: 1 });
 });
 
 document.getElementById('sim-step').addEventListener('click', () => {
