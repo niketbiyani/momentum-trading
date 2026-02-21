@@ -204,6 +204,7 @@ function stockTfCells(opt) { return tfCells(opt, ['1m', '3m']); }
 function render() {
   renderStatus();
   renderSimControls();
+  renderSigmaChart();
   if (activeTab === 'nifty') {
     renderNiftyTab();
     renderLookbackHeatmap();
@@ -501,6 +502,132 @@ document.getElementById('sim-step').addEventListener('click', () => {
 document.getElementById('sim-speed-select').addEventListener('change', e => {
   sendSim({ sim_speed: parseFloat(e.target.value) });
 });
+
+// ── Sigma chart ───────────────────────────────────────────────────────────────
+const SIGMA_MAX_PTS = 600;
+const sigmaHist     = { '5s': [], '15s': [], '1m': [] };
+const SIGMA_COLORS  = { '5s': '#4a7ea0', '15s': '#5b9bd5', '1m': '#58a6ff' };
+const SIGMA_WIDTH   = { '5s': 1,         '15s': 1,          '1m': 1.5       };
+let   lastSimIdx    = -1;
+
+function _appendSigma() {
+  const simIdx = state.sim_idx || 0;
+  // Detect backward step → clear history so chart restarts from the new position
+  if (simIdx < lastSimIdx) {
+    for (const tf of ['5s', '15s', '1m']) sigmaHist[tf] = [];
+  }
+  lastSimIdx = simIdx;
+
+  const opts = state.nifty && state.nifty.options
+    ? Object.values(state.nifty.options)
+    : [];
+  const inds = opts.length ? (opts[0].indicators || {}) : {};
+
+  for (const tf of ['5s', '15s', '1m']) {
+    const z = inds[tf] ? inds[tf].spike_zscore : null;
+    sigmaHist[tf].push(z != null ? z : null);
+    if (sigmaHist[tf].length > SIGMA_MAX_PTS) sigmaHist[tf].shift();
+  }
+}
+
+function _drawSigma() {
+  const canvas = document.getElementById('sigma-canvas');
+  if (!canvas) return;
+
+  const W = canvas.offsetWidth;
+  const H = canvas.offsetHeight;
+  if (!W || !H) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
+    canvas.width  = W * dpr;
+    canvas.height = H * dpr;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  // Y-axis range: at least 0–3.5, expand if data exceeds it
+  let yMax = 3.5;
+  for (const tf of ['5s', '15s', '1m'])
+    for (const v of sigmaHist[tf])
+      if (v != null && v > yMax) yMax = v + 0.5;
+
+  const nPts = Math.max(...['5s', '15s', '1m'].map(tf => sigmaHist[tf].length));
+  const pad  = { top: 4, bottom: 16, left: 26, right: 6 };
+  const pW   = W - pad.left - pad.right;
+  const pH   = H - pad.top  - pad.bottom;
+
+  const toX = k   => pad.left + (nPts > 1 ? (k / (SIGMA_MAX_PTS - 1)) * pW : pW / 2);
+  const toY = val => pad.top  + pH - Math.max(0, val / yMax) * pH;
+
+  // Ref lines at 1σ, 2σ, 3σ
+  ctx.font         = `9px monospace`;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign    = 'right';
+  for (const ref of [1, 2, 3]) {
+    if (ref > yMax + 0.1) continue;
+    const y = toY(ref);
+    ctx.strokeStyle = ref >= 3 ? 'rgba(248,81,73,0.30)'
+                    : ref >= 2 ? 'rgba(240,136,62,0.30)'
+                    :            'rgba(255,255,255,0.07)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 5]);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = ref >= 3 ? '#f85149' : ref >= 2 ? '#f0883e' : '#6e7681';
+    ctx.fillText(`${ref}σ`, pad.left - 2, y);
+  }
+
+  // Zero baseline
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth   = 1;
+  ctx.setLineDash([]);
+  const y0 = toY(0);
+  ctx.beginPath(); ctx.moveTo(pad.left, y0); ctx.lineTo(W - pad.right, y0); ctx.stroke();
+
+  // Offset so all three TF lines are right-aligned regardless of which filled first
+  const offset = SIGMA_MAX_PTS - nPts;
+
+  // Draw lines (5s first — dimmest, 1m last — brightest)
+  for (const tf of ['5s', '15s', '1m']) {
+    const data = sigmaHist[tf];
+    if (!data.length) continue;
+    ctx.strokeStyle = SIGMA_COLORS[tf];
+    ctx.lineWidth   = SIGMA_WIDTH[tf];
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    let pen = false;
+    for (let k = 0; k < data.length; k++) {
+      const v = data[k];
+      if (v == null) { pen = false; continue; }
+      const x = toX(offset + k);
+      const y = toY(v);
+      if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // Time-axis ticks: show sim_ts at the rightmost visible point
+  if (state.sim_ts) {
+    ctx.fillStyle    = '#6e7681';
+    ctx.font         = '9px monospace';
+    ctx.textAlign    = 'right';
+    ctx.textBaseline = 'top';
+    ctx.fillText(state.sim_ts, W - pad.right, H - pad.bottom + 3);
+  }
+}
+
+function renderSigmaChart() {
+  const wrap = document.getElementById('sigma-chart-wrap');
+  if (!state.sim_total) {
+    wrap.classList.add('hidden');
+    return;
+  }
+  wrap.classList.remove('hidden');
+  _appendSigma();
+  _drawSigma();
+}
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 connect();

@@ -60,6 +60,23 @@
   </div>
 </div>
 
+<!-- ── Sigma chart strip (sim mode only) ─────────────────────────────────── -->
+<div id="sigma-chart-wrap" class="hidden">
+  <div class="sigma-chart-hdr">
+    Spkσ over time
+    <span class="sigma-legend">
+      <span class="sigma-leg-5s">── 5s</span>
+      <span class="sigma-leg-15s">── 15s</span>
+      <span class="sigma-leg-1m">── 1m</span>
+    </span>
+    <span class="sigma-ref-labels">
+      <span style="color:var(--orange)">2σ notable</span>
+      <span style="color:var(--red)">3σ extreme</span>
+    </span>
+  </div>
+  <canvas id="sigma-canvas"></canvas>
+</div>
+
 <!-- ── Tab: Nifty Index ───────────────────────────────────────────────────── -->
 <div id="tab-nifty" class="tab-content active">
 
@@ -210,6 +227,6 @@
 
 </div>
 
-<script src="/static/app.js?v=20260221b"></script>
+<script src="/static/app.js?v=20260221c"></script>
 </body>
 </html>

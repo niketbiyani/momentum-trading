@@ -617,3 +617,31 @@ tr.has-signal-ENTRY td  { background: rgba(63,185,80,0.07);  }
 #sim-progress::-moz-progress-bar      { background: var(--accent);  border-radius: 3px; }
 
 #sim-progress-text { color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+/* ── Sigma chart strip ───────────────────────────────────────────────────── */
+#sigma-chart-wrap {
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 16px 8px;
+}
+#sigma-chart-wrap.hidden { display: none; }
+
+.sigma-chart-hdr {
+  font-size: 10px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 5px;
+}
+.sigma-legend { display: flex; gap: 10px; }
+.sigma-leg-5s  { color: #4a7ea0; }
+.sigma-leg-15s { color: #5b9bd5; }
+.sigma-leg-1m  { color: var(--accent); font-weight: 600; }
+.sigma-ref-labels { display: flex; gap: 10px; margin-left: auto; font-size: 10px; }
+
+#sigma-canvas {
+  display: block;
+  width: 100%;
+  height: 80px;
+}
