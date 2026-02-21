@@ -531,21 +531,29 @@ function _appendSigma() {
 }
 
 function _drawSigma() {
+  const wrap   = document.getElementById('sigma-chart-wrap');
   const canvas = document.getElementById('sigma-canvas');
-  if (!canvas) return;
+  if (!canvas || !wrap) return;
 
-  const W = canvas.offsetWidth;
-  const H = canvas.offsetHeight;
-  if (!W || !H) return;
+  // Read from the parent block div — forces a synchronous reflow and is
+  // reliable even on the first frame the element becomes visible.
+  // Subtract the 2×16 px horizontal padding declared in #sigma-chart-wrap.
+  const W = wrap.clientWidth - 32;
+  const H = 80;
+  if (W <= 0) return;
 
   const dpr = window.devicePixelRatio || 1;
-  if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
-    canvas.width  = W * dpr;
-    canvas.height = H * dpr;
-  }
+  canvas.width  = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  // Keep CSS size in sync so the element occupies the right space.
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+
   const ctx = canvas.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
+  ctx.scale(dpr, dpr);
+  // Explicit background fill so the canvas is always opaque and visible.
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
 
   // Y-axis range: at least 0–3.5, expand if data exceeds it
   let yMax = 3.5;
@@ -618,7 +626,6 @@ function _drawSigma() {
   }
 }
 
-let _sigmaRaf = 0;
 function renderSigmaChart() {
   const wrap = document.getElementById('sigma-chart-wrap');
   if (!state.sim_total) {
@@ -627,10 +634,7 @@ function renderSigmaChart() {
   }
   wrap.classList.remove('hidden');
   _appendSigma();
-  // Defer draw to next animation frame so the browser has reflowed the
-  // newly-visible element before we read canvas.offsetWidth.
-  cancelAnimationFrame(_sigmaRaf);
-  _sigmaRaf = requestAnimationFrame(_drawSigma);
+  _drawSigma();
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
