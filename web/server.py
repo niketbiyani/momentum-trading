@@ -37,6 +37,13 @@ _state: dict[str, Any] = {
     "signals": [],
 }
 
+# ── Sim playback control (written by browser via WS, read by simulate.py) ──────
+_sim_control: dict = {
+    "paused": False,
+    "speed":  1.0,   # playback speed multiplier (0 = max)
+    "step":   0,     # pending single-step requests (decremented by simulate.py)
+}
+
 # Set of active WebSocket connections (accessed only from the asyncio event loop)
 _clients: set[WebSocket] = set()
 
@@ -73,12 +80,26 @@ async def ws_endpoint(ws: WebSocket) -> None:
     try:
         # Send current state immediately on connect
         await ws.send_text(json.dumps(_state))
-        # Handle incoming messages (timeframe switch: {"set_tf": "1m"})
+        # Handle incoming messages
         async for raw in ws.iter_text():
             try:
                 msg = json.loads(raw)
                 if "set_tf" in msg:
                     _state["active_tf"] = msg["set_tf"]
+                # Sim playback controls
+                if "sim_pause" in msg:
+                    _sim_control["paused"] = bool(msg["sim_pause"])
+                    if _sim_control["paused"]:
+                        _sim_control["step"] = 0   # cancel pending steps on pause
+                if "sim_speed" in msg:
+                    try:
+                        _sim_control["speed"] = float(msg["sim_speed"])
+                    except (TypeError, ValueError):
+                        pass
+                if "sim_step" in msg:
+                    _sim_control["step"] = max(
+                        0, _sim_control["step"] + int(msg.get("sim_step", 0))
+                    )
             except Exception:
                 pass
     except WebSocketDisconnect:
@@ -129,6 +150,16 @@ def update_state(new_state: dict[str, Any]) -> None:
 def get_active_tf() -> str:
     """Return the timeframe currently selected by the browser client."""
     return _state.get("active_tf", "1m")
+
+
+def get_sim_control() -> dict:
+    """Return the current sim playback control dict (read by simulate.py)."""
+    return _sim_control
+
+
+def set_sim_speed(speed: float) -> None:
+    """Initialise the sim speed from the CLI --speed arg before replay starts."""
+    _sim_control["speed"] = speed
 
 
 def start_server(host: str = "0.0.0.0", port: int = 8000) -> threading.Thread:

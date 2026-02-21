@@ -203,6 +203,7 @@ function stockTfCells(opt) { return tfCells(opt, ['1m', '3m']); }
 // ── Render dispatcher ─────────────────────────────────────────────────────────
 function render() {
   renderStatus();
+  renderSimControls();
   if (activeTab === 'nifty') {
     renderNiftyTab();
     renderLookbackHeatmap();
@@ -448,6 +449,52 @@ document.querySelectorAll('.lb-tf-btn').forEach(btn => {
 // ── TF button wiring ──────────────────────────────────────────────────────────
 document.querySelectorAll('.tf-btn').forEach(btn => {
   btn.addEventListener('click', () => sendTf(btn.dataset.tf));
+});
+
+// ── Sim playback controls ──────────────────────────────────────────────────────
+function sendSim(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+function renderSimControls() {
+  const bar = document.getElementById('sim-bar');
+  if (!state.sim_total) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+
+  const paused = !!state.sim_paused;
+  const ppBtn  = document.getElementById('sim-playpause');
+  ppBtn.textContent = paused ? '▶ Play' : '⏸ Pause';
+  ppBtn.classList.toggle('paused', paused);
+
+  document.getElementById('sim-step').disabled = !paused;
+
+  // Sync speed dropdown to server value only when user isn't actively changing it
+  const sel = document.getElementById('sim-speed-select');
+  if (document.activeElement !== sel) {
+    const svrSpeed = String(state.sim_speed ?? 1);
+    const match = [...sel.options].find(o => o.value === svrSpeed);
+    if (match) sel.value = svrSpeed;
+  }
+
+  const idx   = state.sim_idx   || 0;
+  const total = state.sim_total || 1;
+  const pct   = total > 0 ? (idx / total * 100).toFixed(1) : '0.0';
+  document.getElementById('sim-progress').value = idx;
+  document.getElementById('sim-progress').max   = total;
+  document.getElementById('sim-progress-text').textContent =
+    `${idx.toLocaleString()} / ${total.toLocaleString()}  ${state.sim_ts || ''}  (${pct}%)`;
+}
+
+document.getElementById('sim-playpause').addEventListener('click', () => {
+  sendSim({ sim_pause: !state.sim_paused });
+});
+
+document.getElementById('sim-step').addEventListener('click', () => {
+  sendSim({ sim_step: 1 });
+});
+
+document.getElementById('sim-speed-select').addEventListener('change', e => {
+  sendSim({ sim_speed: parseFloat(e.target.value) });
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

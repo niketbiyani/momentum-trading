@@ -38,7 +38,7 @@ from src.models import OptionInfo, InstrumentState, Tick, Signal, Indicators
 from src.bar_builder import MultiInstrumentBarBuilder
 from src.indicators import IndicatorEngine
 from src.spike_detector import SignalEngine
-from web.server import start_server, update_state, get_active_tf
+from web.server import start_server, update_state, get_active_tf, get_sim_control, set_sim_speed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -266,7 +266,6 @@ def main() -> None:
     else:
         row_interval = 1.0
 
-    sleep_per_row = row_interval / args.speed if args.speed > 0 else 0.0
     eta_min = total * row_interval / max(args.speed, 0.001) / 60
 
     log.info(
@@ -327,6 +326,7 @@ def main() -> None:
 
     # ── Web server ────────────────────────────────────────────────────────────
     start_server(port=args.port)
+    set_sim_speed(args.speed)   # seed speed from CLI arg; browser can override
     log.info(f"Dashboard → http://localhost:{args.port}   (Ctrl+C to quit)")
     time.sleep(0.6)   # let uvicorn bind before we start pushing state
 
@@ -350,21 +350,53 @@ def main() -> None:
                 eng.load_closes(closes)
                 state.indicators[tf] = eng.compute()
 
-        # Push to browser every 500ms wall-clock
-        now = time.time()
-        if now - last_push >= 0.5 or (sleep_per_row == 0 and i % 500 == 0):
-            update_state(_build_web_state(
+        # Push to browser — always when paused (so each step shows up instantly),
+        # otherwise every 500ms wall-clock or every 500 rows at max speed.
+        ctrl   = get_sim_control()
+        paused = ctrl["paused"]
+        now    = time.time()
+        if paused or now - last_push >= 0.5 or (ctrl["speed"] == 0 and i % 500 == 0):
+            web_state = _build_web_state(
                 state, tf_signals, all_signals, bar_builder, i, total, ts,
-            ))
+            )
+            web_state["sim_paused"] = paused
+            web_state["sim_speed"]  = ctrl["speed"]
+            web_state["sim_idx"]    = i
+            web_state["sim_total"]  = total
+            web_state["sim_ts"]     = ts.strftime("%H:%M:%S")
+            update_state(web_state)
             last_push = now
 
-        if sleep_per_row > 0:
-            time.sleep(sleep_per_row)
+        # Pause / step / speed control
+        if paused:
+            if ctrl["step"] > 0:
+                ctrl["step"] -= 1   # consume one step token, advance immediately
+            else:
+                # Block until the browser unpauses or sends a step
+                while True:
+                    ctrl = get_sim_control()
+                    if not ctrl["paused"]:
+                        break
+                    if ctrl["step"] > 0:
+                        ctrl["step"] -= 1
+                        break
+                    time.sleep(0.05)
+        else:
+            speed = ctrl["speed"]
+            if speed > 0:
+                time.sleep(row_interval / speed)
 
     # Final push
-    update_state(_build_web_state(
+    ctrl = get_sim_control()
+    final_state = _build_web_state(
         state, tf_signals, all_signals, bar_builder, total, total, rows[-1][0],
-    ))
+    )
+    final_state["sim_paused"] = False
+    final_state["sim_speed"]  = ctrl["speed"]
+    final_state["sim_idx"]    = total
+    final_state["sim_total"]  = total
+    final_state["sim_ts"]     = rows[-1][0].strftime("%H:%M:%S")
+    update_state(final_state)
     log.info(f"Replay complete — {len(all_signals)} signal(s) fired.")
     log.info("Dashboard remains live. Ctrl+C to quit.")
 

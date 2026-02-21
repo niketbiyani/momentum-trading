@@ -38,6 +38,27 @@
   <div id="clock">--:--:-- IST</div>
 </div>
 
+<!-- ── Sim playback controls (hidden when not simulating) ────────────────── -->
+<div id="sim-bar" class="hidden">
+  <button id="sim-playpause" class="sim-btn">⏸ Pause</button>
+  <button id="sim-step"      class="sim-btn" disabled>⏭ Step</button>
+  <label class="sim-label">Speed
+    <select id="sim-speed-select" class="sim-select">
+      <option value="0.5">0.5×</option>
+      <option value="1" selected>1×</option>
+      <option value="2">2×</option>
+      <option value="5">5×</option>
+      <option value="10">10×</option>
+      <option value="50">50×</option>
+      <option value="0">Max</option>
+    </select>
+  </label>
+  <div id="sim-progress-wrap">
+    <progress id="sim-progress" max="100" value="0"></progress>
+    <span id="sim-progress-text">— / —</span>
+  </div>
+</div>
+
 <!-- ── Tab: Nifty Index ───────────────────────────────────────────────────── -->
 <div id="tab-nifty" class="tab-content active">
 
@@ -188,6 +209,6 @@
 
 </div>
 
-<script src="/static/app.js?v=20260220d"></script>
+<script src="/static/app.js?v=20260221a"></script>
 </body>
 </html>
