@@ -513,11 +513,16 @@ let   lastSimIdx    = -1;
 
 function _appendSigma() {
   const simIdx = state.sim_idx || 0;
-  // Detect backward step → clear history
+
+  // Belt-and-suspenders: never append while the sim reports itself as paused,
+  // UNLESS sim_idx actually changed (single-step forward).
+  if (state.sim_paused && simIdx === lastSimIdx) return;
+
+  // Detect backward step → clear history so chart restarts cleanly
   if (simIdx < lastSimIdx) {
     for (const tf of ['5s', '15s', '1m']) sigmaHist[tf] = [];
   }
-  // Skip when paused (sim_idx unchanged) — do not duplicate points
+  // Skip when sim_idx unchanged (duplicate broadcast while running or paused)
   if (simIdx === lastSimIdx) return;
   lastSimIdx = simIdx;
 
@@ -526,9 +531,23 @@ function _appendSigma() {
     : [];
   const inds = opts.length ? (opts[0].indicators || {}) : {};
 
+  // Collect values and check whether any real σ exists yet
+  const vals = {};
+  let anyReal = false;
   for (const tf of ['5s', '15s', '1m']) {
     const z = inds[tf] ? inds[tf].spike_zscore : null;
-    sigmaHist[tf].push(z != null ? z : null);
+    vals[tf] = z;
+    if (z != null) anyReal = true;
+  }
+
+  // During warmup (all null, nothing recorded yet) skip entirely —
+  // prevents the chart filling with null gaps at high speeds before
+  // the indicator engines have enough bars.
+  const hasHistory = sigmaHist['5s'].length > 0;
+  if (!anyReal && !hasHistory) return;
+
+  for (const tf of ['5s', '15s', '1m']) {
+    sigmaHist[tf].push(vals[tf]);
     if (sigmaHist[tf].length > SIGMA_MAX_PTS) sigmaHist[tf].shift();
   }
 }
