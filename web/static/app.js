@@ -506,16 +506,19 @@ document.getElementById('sim-speed-select').addEventListener('change', e => {
 // ── Sigma chart ───────────────────────────────────────────────────────────────
 const SIGMA_MAX_PTS = 600;
 const sigmaHist     = { '5s': [], '15s': [], '1m': [] };
-const SIGMA_COLORS  = { '5s': '#4a7ea0', '15s': '#5b9bd5', '1m': '#58a6ff' };
-const SIGMA_WIDTH   = { '5s': 1,         '15s': 1,          '1m': 1.5       };
+// Distinct hues: green (fast/5s), orange (medium/15s), blue (slow/1m)
+const SIGMA_COLORS  = { '5s': '#3fb950', '15s': '#f0883e', '1m': '#58a6ff' };
+const SIGMA_WIDTH   = { '5s': 1,         '15s': 1.2,        '1m': 2         };
 let   lastSimIdx    = -1;
 
 function _appendSigma() {
   const simIdx = state.sim_idx || 0;
-  // Detect backward step → clear history so chart restarts from the new position
+  // Detect backward step → clear history
   if (simIdx < lastSimIdx) {
     for (const tf of ['5s', '15s', '1m']) sigmaHist[tf] = [];
   }
+  // Skip when paused (sim_idx unchanged) — do not duplicate points
+  if (simIdx === lastSimIdx) return;
   lastSimIdx = simIdx;
 
   const opts = state.nifty && state.nifty.options
@@ -539,65 +542,61 @@ function _drawSigma() {
   // reliable even on the first frame the element becomes visible.
   // Subtract the 2×16 px horizontal padding declared in #sigma-chart-wrap.
   const W = wrap.clientWidth - 32;
-  const H = 80;
+  const H = 140;
   if (W <= 0) return;
 
   const dpr = window.devicePixelRatio || 1;
   canvas.width  = Math.round(W * dpr);
   canvas.height = Math.round(H * dpr);
-  // Keep CSS size in sync so the element occupies the right space.
   canvas.style.width  = W + 'px';
   canvas.style.height = H + 'px';
 
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
-  // Explicit background fill so the canvas is always opaque and visible.
   ctx.fillStyle = '#0d1117';
   ctx.fillRect(0, 0, W, H);
 
-  // Y-axis range: at least 0–3.5, expand if data exceeds it
-  let yMax = 3.5;
+  // Y-axis: floor at 8σ, expand further if data exceeds it
+  let yMax = 8;
   for (const tf of ['5s', '15s', '1m'])
     for (const v of sigmaHist[tf])
-      if (v != null && v > yMax) yMax = v + 0.5;
+      if (v != null && v > yMax) yMax = Math.ceil(v) + 1;
 
   const nPts = Math.max(...['5s', '15s', '1m'].map(tf => sigmaHist[tf].length));
-  const pad  = { top: 4, bottom: 16, left: 26, right: 6 };
+  const pad  = { top: 6, bottom: 18, left: 36, right: 8 };
   const pW   = W - pad.left - pad.right;
   const pH   = H - pad.top  - pad.bottom;
 
   const toX = k   => pad.left + (nPts > 1 ? (k / (SIGMA_MAX_PTS - 1)) * pW : pW / 2);
   const toY = val => pad.top  + pH - Math.max(0, val / yMax) * pH;
 
-  // Ref lines at 1σ, 2σ, 3σ
-  ctx.font         = `9px monospace`;
+  // Ref lines at every integer σ up to yMax
+  ctx.font         = '10px monospace';
   ctx.textBaseline = 'middle';
   ctx.textAlign    = 'right';
-  for (const ref of [1, 2, 3]) {
-    if (ref > yMax + 0.1) continue;
+  for (let ref = 1; ref <= yMax; ref++) {
     const y = toY(ref);
-    ctx.strokeStyle = ref >= 3 ? 'rgba(248,81,73,0.75)'
-                    : ref >= 2 ? 'rgba(240,136,62,0.65)'
-                    :            'rgba(255,255,255,0.18)';
+    const isExtreme  = ref >= 5;
+    const isNotable  = ref >= 3;
+    ctx.strokeStyle = isExtreme ? 'rgba(248,81,73,0.70)'
+                    : isNotable ? 'rgba(240,136,62,0.55)'
+                    :             'rgba(255,255,255,0.14)';
     ctx.lineWidth = 1;
-    ctx.setLineDash([4, 5]);
+    ctx.setLineDash(isExtreme ? [6, 4] : isNotable ? [4, 5] : [2, 6]);
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = ref >= 3 ? '#f85149' : ref >= 2 ? '#f0883e' : '#8b949e';
-    ctx.fillText(`${ref}σ`, pad.left - 2, y);
+    ctx.fillStyle = isExtreme ? '#f85149' : isNotable ? '#f0883e' : '#6e7681';
+    ctx.fillText(`${ref}σ`, pad.left - 3, y);
   }
 
   // Zero baseline
-  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
   ctx.lineWidth   = 1;
   ctx.setLineDash([]);
-  const y0 = toY(0);
-  ctx.beginPath(); ctx.moveTo(pad.left, y0); ctx.lineTo(W - pad.right, y0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad.left, toY(0)); ctx.lineTo(W - pad.right, toY(0)); ctx.stroke();
 
-  // Offset so all three TF lines are right-aligned regardless of which filled first
+  // Sigma traces — 5s behind, 1m on top
   const offset = SIGMA_MAX_PTS - nPts;
-
-  // Draw lines (5s first — dimmest, 1m last — brightest)
   for (const tf of ['5s', '15s', '1m']) {
     const data = sigmaHist[tf];
     if (!data.length) continue;
@@ -616,13 +615,13 @@ function _drawSigma() {
     ctx.stroke();
   }
 
-  // Time-axis ticks: show sim_ts at the rightmost visible point
+  // Timestamp at bottom-right
   if (state.sim_ts) {
-    ctx.fillStyle    = '#6e7681';
-    ctx.font         = '9px monospace';
+    ctx.fillStyle    = '#c9d1d9';
+    ctx.font         = '10px monospace';
     ctx.textAlign    = 'right';
-    ctx.textBaseline = 'top';
-    ctx.fillText(state.sim_ts, W - pad.right, H - pad.bottom + 3);
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(state.sim_ts, W - pad.right, H - 2);
   }
 }
 

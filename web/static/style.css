@@ -635,9 +635,9 @@ tr.has-signal-ENTRY td  { background: rgba(63,185,80,0.07);  }
   margin-bottom: 5px;
 }
 .sigma-legend { display: flex; gap: 10px; }
-.sigma-leg-5s  { color: #4a7ea0; }
-.sigma-leg-15s { color: #5b9bd5; }
-.sigma-leg-1m  { color: var(--accent); font-weight: 600; }
+.sigma-leg-5s  { color: #3fb950; }
+.sigma-leg-15s { color: #f0883e; }
+.sigma-leg-1m  { color: #58a6ff; font-weight: 600; }
 .sigma-ref-labels { display: flex; gap: 10px; margin-left: auto; font-size: 10px; }
 
 #sigma-canvas {
