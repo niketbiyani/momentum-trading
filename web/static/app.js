@@ -568,19 +568,19 @@ function _drawSigma() {
   for (const ref of [1, 2, 3]) {
     if (ref > yMax + 0.1) continue;
     const y = toY(ref);
-    ctx.strokeStyle = ref >= 3 ? 'rgba(248,81,73,0.30)'
-                    : ref >= 2 ? 'rgba(240,136,62,0.30)'
-                    :            'rgba(255,255,255,0.07)';
+    ctx.strokeStyle = ref >= 3 ? 'rgba(248,81,73,0.75)'
+                    : ref >= 2 ? 'rgba(240,136,62,0.65)'
+                    :            'rgba(255,255,255,0.18)';
     ctx.lineWidth = 1;
-    ctx.setLineDash([3, 5]);
+    ctx.setLineDash([4, 5]);
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = ref >= 3 ? '#f85149' : ref >= 2 ? '#f0883e' : '#6e7681';
+    ctx.fillStyle = ref >= 3 ? '#f85149' : ref >= 2 ? '#f0883e' : '#8b949e';
     ctx.fillText(`${ref}σ`, pad.left - 2, y);
   }
 
   // Zero baseline
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
   ctx.lineWidth   = 1;
   ctx.setLineDash([]);
   const y0 = toY(0);
@@ -618,6 +618,7 @@ function _drawSigma() {
   }
 }
 
+let _sigmaRaf = 0;
 function renderSigmaChart() {
   const wrap = document.getElementById('sigma-chart-wrap');
   if (!state.sim_total) {
@@ -626,7 +627,10 @@ function renderSigmaChart() {
   }
   wrap.classList.remove('hidden');
   _appendSigma();
-  _drawSigma();
+  // Defer draw to next animation frame so the browser has reflowed the
+  // newly-visible element before we read canvas.offsetWidth.
+  cancelAnimationFrame(_sigmaRaf);
+  _sigmaRaf = requestAnimationFrame(_drawSigma);
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
