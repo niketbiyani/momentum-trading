@@ -23,3 +23,6 @@ build/
 
 # Cache files
 .instruments_cache.csv
+.bar_cache.db
+.bar_cache.db-shm
+.bar_cache.db-wal
